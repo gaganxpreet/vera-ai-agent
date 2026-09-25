@@ -81,7 +81,7 @@ async def tick(req: TickRequest):
         strategy = item["strategy"]
         
         try:
-            action = composer.compose_proactive_action(tid, t_data, strategy)
+            action = await composer.compose_proactive_action(tid, t_data, strategy)
             if action:
                 actions.append(action)
         except Exception as e:
@@ -94,7 +94,7 @@ async def tick(req: TickRequest):
 
 @app.post("/v1/reply", response_model=ReplyResponse)
 async def reply(req: ReplyRequest):
-    resp = composer.compose_reply(
+    resp = await composer.compose_reply(
         conversation_id=req.conversation_id,
         merchant_id=req.merchant_id,
         customer_id=req.customer_id,

@@ -11,23 +11,29 @@ from vera.suppression import suppression_manager
 from vera.models import ProactiveAction, ReplyResponse
 
 class MessageComposer:
-    def compose_proactive_action(
+    async def compose_proactive_action(
         self,
         trigger_id: str,
         trigger: Dict[str, Any],
-        strategy: TriggerStrategy
+        strategy: TriggerStrategy,
+        category: Optional[Dict[str, Any]] = None,
+        merchant: Optional[Dict[str, Any]] = None,
+        customer: Optional[Dict[str, Any]] = None
     ) -> Optional[ProactiveAction]:
         """
         Executes proactive composition flow:
-        Resolve linked entities -> project context -> build prompt -> LLM -> validate -> format
+        Resolve linked entities -> project context -> build prompt -> LLM (async) -> validate -> format
         """
         mid = trigger.get("merchant_id")
         cid = trigger.get("customer_id")
         
-        merchant = context_store.get("merchant", mid) if mid else None
-        category_slug = merchant.get("category_slug") if merchant else trigger.get("payload", {}).get("category")
-        category = context_store.get("category", category_slug) if category_slug else None
-        customer = context_store.get("customer", cid) if cid else None
+        if merchant is None and mid:
+            merchant = context_store.get("merchant", mid)
+        if category is None:
+            category_slug = merchant.get("category_slug") if merchant else trigger.get("payload", {}).get("category")
+            category = context_store.get("category", category_slug) if category_slug else None
+        if customer is None and cid:
+            customer = context_store.get("customer", cid)
 
         # Build projected minimal context view
         projection = project_context_for_trigger(category, merchant, trigger, customer)
@@ -36,9 +42,9 @@ class MessageComposer:
         conv_id = f"conv_{mid}_{trigger.get('kind')}_{uuid.uuid4().hex[:6]}"
         conv_state = conversation_store.get_or_create(conv_id, merchant_id=mid, customer_id=cid)
 
-        # Build prompt & query LLM
+        # Build prompt & query LLM (non-blocking async — does not stall the event loop)
         prompts = build_composition_prompt(projection, strategy, conv_state)
-        raw_res = llm_client.compose_structured(projection, prompts["system"], prompts["user"])
+        raw_res = await llm_client.acompose_structured(projection, prompts["system"], prompts["user"])
 
         # Deterministic validation and repair
         validated = output_validator.validate_and_repair_proactive(
@@ -46,7 +52,8 @@ class MessageComposer:
             expected_send_as=strategy.send_as,
             expected_cta=strategy.cta_type,
             template_name=strategy.template_name,
-            previous_body_hashes=conv_state.previous_body_hashes
+            previous_body_hashes=conv_state.previous_body_hashes,
+            projection=projection
         )
 
         # Update conversation state & mark suppression
@@ -72,7 +79,7 @@ class MessageComposer:
             rationale=validated["rationale"]
         )
 
-    def compose_reply(
+    async def compose_reply(
         self,
         conversation_id: str,
         merchant_id: Optional[str],
@@ -83,7 +90,7 @@ class MessageComposer:
     ) -> ReplyResponse:
         """
         Executes reply flow:
-        State classification -> intent transition -> auto-reply check -> opt-out -> LLM -> reply response
+        State classification -> intent transition -> auto-reply check -> opt-out -> LLM (async) -> reply response
         """
         conv_state = conversation_store.get_or_create(conversation_id, merchant_id=merchant_id, customer_id=customer_id)
         
@@ -160,7 +167,7 @@ class MessageComposer:
         recent_turns = [{"role": t.role, "message": t.message} for t in conv_state.turns[-4:]]
 
         prompts = build_reply_prompt(inbound_message, inbound_intent, conv_state.mode, projection, recent_turns)
-        raw_res = llm_client.reply_structured(projection, inbound_message, prompts["system"], prompts["user"])
+        raw_res = await llm_client.areply_structured(projection, inbound_message, prompts["system"], prompts["user"])
 
         # Deterministic validation
         validated = output_validator.validate_and_repair_reply(raw_res, conv_state.previous_body_hashes)

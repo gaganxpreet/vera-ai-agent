@@ -184,3 +184,88 @@ def test_auto_reply_detection():
     })
     assert r2.status_code == 200
     assert r2.json()["action"] == "end"
+
+def test_expired_trigger_ignored():
+    client.post("/v1/context", json={
+        "scope": "merchant", "context_id": "m_exp", "version": 1,
+        "payload": {"name": "Test Merchant", "category_slug": "salons"}
+    })
+    client.post("/v1/context", json={
+        "scope": "category", "context_id": "salons", "version": 1,
+        "payload": {"slug": "salons"}
+    })
+    # Trigger expired at 18:00
+    client.post("/v1/context", json={
+        "scope": "trigger", "context_id": "trg_exp", "version": 1,
+        "payload": {
+            "kind": "curious_ask_due",
+            "merchant_id": "m_exp",
+            "expires_at": "2026-09-25T18:00:00Z"
+        }
+    })
+    # Simulation now is 20:00 (after expiry)
+    tick_resp = client.post("/v1/tick", json={
+        "now": "2026-09-25T20:00:00Z",
+        "available_triggers": ["trg_exp"]
+    })
+    assert tick_resp.status_code == 200
+    assert len(tick_resp.json()["actions"]) == 0
+
+def test_category_fit_no_tooth_emoji_for_gym():
+    from bot import compose
+    gym_category = {"slug": "gyms", "display_name": "Gyms & Fitness"}
+    gym_merchant = {"name": "Zen Yoga Studio", "category_slug": "gyms"}
+    gym_customer = {"name": "Diya"}
+    recall_trigger = {
+        "id": "trg_gym_recall",
+        "kind": "recall_due",
+        "scope": "customer",
+        "merchant_id": "m_zen",
+        "customer_id": "c_diya",
+        "payload": {"metric_or_topic": "recall_due"}
+    }
+    res = compose(gym_category, gym_merchant, recall_trigger, gym_customer)
+    body = res["body"]
+    assert "🦷" not in body
+    assert "cleaning" not in body.lower()
+    assert "dental" not in body.lower()
+    assert any(term in body.lower() for term in ["fitness", "workout", "session", "progress"])
+
+def test_hard_opt_out_on_subsequent_reply():
+    # 1. Opt out on turn 2
+    r1 = client.post("/v1/reply", json={
+        "conversation_id": "conv_optout",
+        "merchant_id": "m_opt",
+        "message": "stop unsubscribe",
+        "turn_number": 2
+    })
+    assert r1.status_code == 200
+    assert r1.json()["action"] == "end"
+
+    # 2. Subsequent normal message on same conversation should immediately end without LLM
+    r2 = client.post("/v1/reply", json={
+        "conversation_id": "conv_optout",
+        "merchant_id": "m_opt",
+        "message": "Hello are you there? I want to start",
+        "turn_number": 3
+    })
+    assert r2.status_code == 200
+    assert r2.json()["action"] == "end"
+
+def test_fact_grounding_validator():
+    from vera.fact_registry import FactRegistry
+    projection = {
+        "merchant": {"name": "Apollo Pharmacy", "locality": "Jaipur"},
+        "trigger": {"payload": {"delta_pct": -0.20, "days_remaining": 7}}
+    }
+    facts = FactRegistry.extract_allowed_facts(projection)
+    
+    # Grounded claim with verified facts
+    valid, issues = FactRegistry.verify_grounding("Noticed a 20% dip over 7 days in Jaipur", facts)
+    assert valid is True
+
+    # Hallucinated number
+    valid, issues = FactRegistry.verify_grounding("Your revenue dropped by 88% and you owe ₹99999", facts)
+    assert valid is False
+    assert len(issues) >= 1
+

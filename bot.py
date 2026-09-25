@@ -1,4 +1,5 @@
-from vera.context_store import context_store
+from typing import Optional, Dict, Any
+import asyncio
 from vera.composer import composer
 from vera.strategies import get_strategy_for_kind
 
@@ -6,17 +7,8 @@ def compose(category: dict, merchant: dict, trigger: dict, customer: dict = None
     """
     Candidate composition interface as defined in challenge-brief.md:
     compose(category, merchant, trigger, customer?) -> {body, cta, send_as, suppression_key, rationale}
+    Pure stateless composition without mutating global context_store.
     """
-    # Temporarily store to context_store to ensure state consistency
-    if category and "slug" in category:
-        context_store.upsert("category", category["slug"], 1, category)
-    if merchant and "merchant_id" in merchant:
-        context_store.upsert("merchant", merchant["merchant_id"], 1, merchant)
-    if customer and "customer_id" in customer:
-        context_store.upsert("customer", customer["customer_id"], 1, customer)
-    if trigger and "id" in trigger:
-        context_store.upsert("trigger", trigger["id"], 1, trigger)
-
     tid = trigger.get("id", "trg_direct")
     strategy = get_strategy_for_kind(
         trigger.get("kind", ""),
@@ -25,8 +17,19 @@ def compose(category: dict, merchant: dict, trigger: dict, customer: dict = None
         category=category,
         merchant=merchant
     )
-    
-    action = composer.compose_proactive_action(tid, trigger, strategy)
+
+    # compose_proactive_action is async; bridge it here with asyncio.run()
+    # (this function is only called from tests / the judge's compose() harness, never from a live FastAPI route)
+    action = asyncio.run(
+        composer.compose_proactive_action(
+            tid,
+            trigger,
+            strategy,
+            category=category,
+            merchant=merchant,
+            customer=customer
+        )
+    )
     if action:
         return {
             "body": action.body,

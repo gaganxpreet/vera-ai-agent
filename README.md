@@ -34,7 +34,7 @@ This solution implements a deterministic, stateful message composition engine fo
 
 1. **Context Projection over Monolithic Injection**:
    - Rather than dumping the full multi-megabyte dataset or full digests into prompts, `context_selector.py` isolates only linked merchant identity, exact metrics/deltas, category voice profile, and the single targeted digest item.
-   - *Tradeoff*: Slightly more routing logic in exchange for sub-second latency and zero token waste.
+   - *Tradeoff*: Context projection substantially reduces prompt size and eliminates token waste while bounding processing latency; external LLM latency remains provider-dependent.
 
 2. **Stateful Conversation State Machine**:
    - Maintains conversation history, body hashes (to guarantee anti-repetition), auto-reply counters per merchant, and explicit opt-out status.

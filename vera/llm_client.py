@@ -79,23 +79,40 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
 
     elif kind == "recall_due":
         cust_name = customer.get("name", "there") if customer else "there"
-        clinic_name = merchant.get("name", "our clinic")
+        m_name = merchant.get("name", "our clinic")
+        cat_slug = category.get("slug") or merchant.get("category_slug", "dentists")
         slots = t_payload.get("available_slots", [])
         slot_str = f"{slots[0].get('label')} or {slots[1].get('label')}" if len(slots) >= 2 else "this week"
         active_offers = merchant.get("active_offers", [])
         offer_str = f" {active_offers[0].get('title')}." if active_offers else ""
+
+        if cat_slug == "gyms":
+            body_text = f"Hi {cust_name}, {m_name} team here! It's time for your periodic fitness progress review and workout session. Open slots: {slot_str}.{offer_str} Shall we reserve one for you?"
+        elif cat_slug == "salons":
+            body_text = f"Hi {cust_name}, {m_name} here ✨ Time for your next styling & care session. We have open slots: {slot_str}.{offer_str} Would you like us to book a time?"
+        elif cat_slug == "pharmacies":
+            body_text = f"Hi {cust_name}, {m_name} here. Gentle reminder for your routine health and medication refill. Slots open: {slot_str}.{offer_str} Would you like us to prepare it for pickup?"
+        elif cat_slug == "restaurants":
+            body_text = f"Hi {cust_name}, {m_name} here! We'd love to welcome you back for your next dining visit. Open tables: {slot_str}.{offer_str} Would you like to reserve a table?"
+        else: # dentists
+            body_text = f"Hi {cust_name}, {m_name} here 🦷 It's time for your routine 6-month cleaning recall. We have slots open: {slot_str}.{offer_str} Would you like to confirm one of these times?"
+
         return {
-            "body": f"Hi {cust_name}, {clinic_name} here 🦷 It's time for your routine 6-month cleaning recall. We have slots open: {slot_str}.{offer_str} Would you like to confirm one of these times?",
+            "body": body_text,
             "cta": "binary_yes_no",
             "template_name": "merchant_recall_reminder_v1",
-            "template_params": [cust_name, clinic_name, slot_str],
+            "template_params": [cust_name, m_name, slot_str],
             "send_as": "merchant_on_behalf",
-            "rationale": "Personalized customer recall using verified visit interval, real open slots, and active clinic offer."
+            "rationale": f"Personalized customer recall tailored to {cat_slug} category voice and real availability."
         }
 
     elif kind == "perf_dip":
         metric = t_payload.get("metric", "traffic")
         delta_val = t_payload.get("delta_pct")
+        if delta_val is None:
+            d7 = merchant.get("performance", {}).get("delta_7d", {})
+            delta_val = d7.get(f"{metric}_pct") or d7.get("calls_pct") or d7.get("views_pct")
+
         delta_phrase = f"dipped {int(abs(delta_val)*100)}%" if delta_val is not None else "dipped"
         window = t_payload.get("window")
         window_phrase = f" over the past {window}" if window else ""
@@ -109,8 +126,8 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         }
 
     elif kind == "renewal_due":
-        days = t_payload.get("days_remaining")
-        plan = t_payload.get("plan", "business")
+        days = t_payload.get("days_remaining") or merchant.get("subscription", {}).get("days_remaining")
+        plan = t_payload.get("plan") or merchant.get("subscription", {}).get("plan", "business")
         amt = t_payload.get("renewal_amount")
         days_phrase = f"has {days} days remaining" if days is not None else "is due for renewal soon"
         amt_phrase = f" (₹{amt})" if amt is not None else ""
@@ -118,13 +135,29 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             "body": f"Hi {owner_name}, your {merchant.get('name')} {plan} subscription {days_phrase}{amt_phrase}. Renew today to keep your verified badge and priority search ranking active without disruption. Want me to generate the instant renewal link?",
             "cta": "binary_yes_no",
             "template_name": "vera_renewal_reminder_v1",
-            "template_params": [owner_name, plan, str(days or "soon")],
+            "template_params": [owner_name, str(plan), str(days or "soon")],
             "send_as": "vera",
             "rationale": "Continuity protection referencing verified subscription details without inventing amounts."
         }
 
     elif kind == "festival_upcoming":
-        fest = t_payload.get("festival", "the upcoming festival")
+        fest = t_payload.get("festival")
+        if not fest:
+            # Check merchant signals or seasonal beats
+            signals = merchant.get("signals", [])
+            if any("diwali" in s.lower() for s in signals):
+                fest = "Diwali"
+            elif any("ipl" in s.lower() for s in signals):
+                fest = "IPL Match Season"
+            else:
+                cat_slug = category.get("slug") or merchant.get("category_slug", "")
+                if cat_slug == "gyms":
+                    fest = "the fitness resolution window"
+                elif cat_slug == "salons":
+                    fest = "the upcoming festive wedding season"
+                else:
+                    fest = "the festive season"
+
         days = t_payload.get("days_until")
         days_phrase = f"in {days} days" if days is not None else "soon"
         loc = merchant.get("locality") or "your area"
@@ -167,12 +200,13 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         }
 
     elif "planning" in kind or "program_drafting" in kind:
-        program = t_payload.get("program_title", "new program package")
+        program = t_payload.get("intent_topic") or t_payload.get("program_title") or "new program package"
+        clean_prog = program.replace("_", " ").title()
         return {
-            "body": f"Hi {owner_name}, drafted a campaign outline for {merchant.get('name')} around {program}. Ready to review and schedule for this weekend. Shall I send the 3-line preview?",
+            "body": f"Hi {owner_name}, drafted a campaign outline for {merchant.get('name')} around {clean_prog}. Ready to review and schedule for this weekend. Shall I send the 3-line preview?",
             "cta": "binary_yes_no",
             "template_name": "vera_planning_v1",
-            "template_params": [owner_name, program],
+            "template_params": [owner_name, clean_prog],
             "send_as": "vera",
             "rationale": "High-intent program planning draft externalizing effort with a quick preview binary ask."
         }
@@ -180,6 +214,10 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     elif "appointment" in kind:
         cust_name = customer.get("name", "there") if customer else "there"
         slot = t_payload.get("slot_time")
+        if not slot:
+            slots = t_payload.get("next_session_options") or t_payload.get("available_slots") or []
+            if slots and isinstance(slots, list) and isinstance(slots[0], dict):
+                slot = slots[0].get("label")
         slot_str = f" for {slot}" if slot else " for your upcoming visit"
         return {
             "body": f"Hi {cust_name}, gentle reminder from {merchant.get('name')}{slot_str}. Looking forward to seeing you! Reply 1 to confirm or let us know if you need to reschedule.",
@@ -191,28 +229,45 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         }
 
     elif "milestone" in kind:
-        count = t_payload.get("review_count")
-        count_phrase = f"crossed {count} verified customer reviews" if count else "received fantastic new customer reviews"
+        val_now = t_payload.get("value_now")
+        m_val = t_payload.get("milestone_value")
+        count = t_payload.get("review_count") or val_now
+        
+        if val_now is not None and m_val is not None:
+            diff = m_val - val_now
+            count_phrase = f"reached {val_now} verified reviews — just {diff} away from your {m_val} milestone"
+        elif count:
+            count_phrase = f"crossed {count} verified customer reviews"
+        else:
+            leads = merchant.get("performance", {}).get("leads")
+            count_phrase = f"crossed {leads} customer leads" if leads else "reached a verified performance milestone"
+
         return {
             "body": f"Congratulations {owner_name}! {merchant.get('name')} just {count_phrase} on your profile. I've drafted a celebratory update to share with your customers. Want me to send the draft?",
             "cta": "binary_yes_no",
             "template_name": "vera_milestone_v1",
             "template_params": [owner_name, str(count or "reviews")],
             "send_as": "vera",
-            "rationale": "Celebrates exact milestone achievement without inventing review counts."
+            "rationale": "Celebrates exact milestone achievement with grounded verifiable figures."
         }
 
     elif "perf_spike" in kind:
         metric = t_payload.get("metric", "views")
         delta_val = t_payload.get("delta_pct")
-        delta_phrase = f"+{int(abs(delta_val)*100)}%" if delta_val is not None else "significantly"
+        if delta_val is None:
+            d7 = merchant.get("performance", {}).get("delta_7d", {})
+            delta_val = d7.get(f"{metric}_pct") or d7.get("views_pct") or d7.get("calls_pct")
+
+        delta_phrase = f"+{int(abs(delta_val)*100)}%" if delta_val is not None else "strongly"
+        views_count = merchant.get("performance", {}).get(metric)
+        views_phrase = f" ({views_count} total)" if views_count else ""
         return {
-            "body": f"Great news {owner_name}! {metric.title()} for {merchant.get('name')} surged {delta_phrase} this week. Let's capitalize on this momentum by activating a fresh lead spotlight. Shall we proceed?",
+            "body": f"Great news {owner_name}! {metric.title()} for {merchant.get('name')} surged {delta_phrase}{views_phrase} this week. Let's capitalize on this momentum by activating a fresh lead spotlight. Shall we proceed?",
             "cta": "binary_yes_no",
             "template_name": "vera_perf_spike_v1",
             "template_params": [owner_name, metric, delta_phrase],
             "send_as": "vera",
-            "rationale": "Leverages verified traffic spike momentum into growth opportunity."
+            "rationale": "Leverages verified traffic spike momentum with grounded performance metrics."
         }
 
     elif "competitor" in kind:
@@ -275,28 +330,29 @@ class LLMClient:
         else:
             self.api_key = None
 
-    def complete(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+    async def acomplete(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        """Non-blocking async completion using httpx."""
         if not self.api_key:
             return None
 
+        import httpx
         try:
             if self.provider == "gemini":
-                import urllib.request as urlrequest
-                body = json.dumps({
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={self.api_key}"
+                body = {
                     "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1000}
-                }).encode("utf-8")
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={self.api_key}"
-                req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"})
-                with urlrequest.urlopen(req, timeout=25) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                }
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(url, json=body)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data["candidates"][0]["content"]["parts"][0]["text"]
 
             elif self.provider in ["openai", "groq"]:
-                import urllib.request as urlrequest
                 base_url = "https://api.openai.com/v1" if self.provider == "openai" else "https://api.groq.com/openai/v1"
                 model = settings.openai_model if self.provider == "openai" else settings.groq_model
-                body = json.dumps({
+                body = {
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
@@ -304,20 +360,97 @@ class LLMClient:
                     ],
                     "temperature": 0.0,
                     "max_tokens": 1000
-                }).encode("utf-8")
-                req = urlrequest.Request(
-                    f"{base_url}/chat/completions",
-                    data=body,
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-                )
-                with urlrequest.urlopen(req, timeout=25) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    return data["choices"][0]["message"]["content"]
+                }
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(
+                        f"{base_url}/chat/completions",
+                        json=body,
+                        headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data["choices"][0]["message"]["content"]
         except Exception as e:
-            logger.warning(f"LLM API call failed ({self.provider}): {e}")
+            logger.warning(f"Async LLM call failed ({self.provider}): {e}")
             return None
 
         return None
+
+    def complete(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        """Synchronous wrapper using httpx with 10s timeout."""
+        if not self.api_key:
+            return None
+
+        import httpx
+        try:
+            if self.provider == "gemini":
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={self.api_key}"
+                body = {
+                    "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
+                    "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1000}
+                }
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.post(url, json=body)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+            elif self.provider in ["openai", "groq"]:
+                base_url = "https://api.openai.com/v1" if self.provider == "openai" else "https://api.groq.com/openai/v1"
+                model = settings.openai_model if self.provider == "openai" else settings.groq_model
+                body = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 1000
+                }
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.post(
+                        f"{base_url}/chat/completions",
+                        json=body,
+                        headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.warning(f"Sync LLM call failed ({self.provider}): {e}")
+            return None
+
+        return None
+
+    async def acompose_structured(self, projection: Dict[str, Any], system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+        raw_text = await self.acomplete(system_prompt, user_prompt)
+        if raw_text:
+            try:
+                import re
+                match = re.search(r'\{[\s\S]*\}', raw_text)
+                if match:
+                    parsed = json.loads(match.group())
+                    if "body" in parsed:
+                        return parsed
+            except Exception as e:
+                logger.warning(f"Failed to parse LLM structured output: {e}")
+
+        return _generate_grounded_fallback(projection)
+
+    async def areply_structured(self, projection: Dict[str, Any], inbound_msg: str, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+        raw_text = await self.acomplete(system_prompt, user_prompt)
+        if raw_text:
+            try:
+                import re
+                match = re.search(r'\{[\s\S]*\}', raw_text)
+                if match:
+                    parsed = json.loads(match.group())
+                    if "action" in parsed:
+                        return parsed
+            except Exception as e:
+                logger.warning(f"Failed to parse LLM reply output: {e}")
+
+        return _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_msg)
 
     def compose_structured(self, projection: Dict[str, Any], system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         raw_text = self.complete(system_prompt, user_prompt)
@@ -351,3 +484,4 @@ class LLMClient:
         return _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_msg)
 
 llm_client = LLMClient()
+

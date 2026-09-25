@@ -29,11 +29,11 @@ def project_context_for_trigger(
         ident = merchant.get("identity", {})
         projected_merchant = {
             "merchant_id": merchant.get("merchant_id"),
-            "name": ident.get("name"),
-            "owner_first_name": ident.get("owner_first_name"),
-            "city": ident.get("city"),
-            "locality": ident.get("locality"),
-            "languages": ident.get("languages", ["en"]),
+            "name": ident.get("name") or merchant.get("name"),
+            "owner_first_name": ident.get("owner_first_name") or merchant.get("owner_first_name"),
+            "city": ident.get("city") or merchant.get("city"),
+            "locality": ident.get("locality") or merchant.get("locality"),
+            "languages": ident.get("languages") or merchant.get("languages", ["en"]),
             "signals": merchant.get("signals", [])
         }
         
@@ -81,8 +81,8 @@ def project_context_for_trigger(
         c_ident = customer.get("identity", {})
         projected_customer = {
             "customer_id": customer.get("customer_id"),
-            "name": c_ident.get("name"),
-            "language_pref": c_ident.get("language_pref", "en"),
+            "name": c_ident.get("name") or customer.get("name"),
+            "language_pref": c_ident.get("language_pref") or customer.get("language_pref", "en"),
             "relationship": customer.get("relationship", {}),
             "state": customer.get("state"),
             "preferences": customer.get("preferences", {}),
