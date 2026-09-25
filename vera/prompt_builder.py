@@ -103,7 +103,10 @@ Return JSON:
   "rationale": "..."
 }}"""
 
-    user_prompt = f"""Recent Turns:
+    user_prompt = f"""Context Projection (Original Trigger & Merchant Facts):
+{json.dumps(projection, indent=2)}
+
+Recent Conversation Turns:
 {json.dumps(recent_turns, indent=2)}
 
 Incoming Message: "{inbound_message}"

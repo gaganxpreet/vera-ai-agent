@@ -5,9 +5,9 @@ from vera.strategies import get_strategy_for_kind
 
 def compose(category: dict, merchant: dict, trigger: dict, customer: dict = None) -> dict:
     """
-    Candidate composition interface as defined in challenge-brief.md:
+    Direct synchronous compatibility wrapper around the stateful composer.
     compose(category, merchant, trigger, customer?) -> {body, cta, send_as, suppression_key, rationale}
-    Pure stateless composition without mutating global context_store.
+    Executes proactive composition via asyncio bridge for evaluation tools and test harnesses.
     """
     tid = trigger.get("id", "trg_direct")
     strategy = get_strategy_for_kind(

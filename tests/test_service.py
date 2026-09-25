@@ -451,3 +451,26 @@ def test_production_composer_rejects_hallucinated_facts():
     assert "85%" not in validated["body"]
     assert "25%" in validated["body"]
 
+
+def test_reply_prompt_includes_context_projection():
+    """Verify build_reply_prompt incorporates context projection facts into user prompt."""
+    from vera.prompt_builder import build_reply_prompt
+
+    projection = {
+        "merchant": {"name": "Biryani House", "owner_first_name": "Karan"},
+        "trigger": {"kind": "perf_dip", "payload": {"metric": "leads", "delta_pct": -0.40}}
+    }
+
+    prompts = build_reply_prompt(
+        inbound_message="What dropped exactly?",
+        intent="QUESTION",
+        mode="EXPLORATION",
+        projection=projection,
+        recent_turns=[]
+    )
+
+    assert "Context Projection" in prompts["user"]
+    assert "leads" in prompts["user"]
+    assert "40%" in prompts["user"] or "-0.4" in prompts["user"]
+
+

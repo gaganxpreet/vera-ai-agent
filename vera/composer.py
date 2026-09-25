@@ -173,7 +173,12 @@ class MessageComposer:
         raw_res = await llm_client.areply_structured(projection, inbound_message, prompts["system"], prompts["user"])
 
         # Deterministic validation
-        validated = output_validator.validate_and_repair_reply(raw_res, conv_state.previous_body_hashes)
+        validated = output_validator.validate_and_repair_reply(
+            raw_res,
+            conv_state.previous_body_hashes,
+            projection=projection,
+            inbound_message=inbound_message
+        )
         
         # Record bot reply turn
         conversation_store.record_turn(

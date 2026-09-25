@@ -67,10 +67,12 @@ class OutputValidator:
     def validate_and_repair_reply(
         self,
         raw_output: Dict[str, Any],
-        previous_body_hashes: List[str]
+        previous_body_hashes: List[str],
+        projection: Optional[Dict[str, Any]] = None,
+        inbound_message: str = ""
     ) -> Dict[str, Any]:
         """
-        Deterministically verifies and repairs LLM reply output.
+        Deterministically verifies and repairs LLM reply output, including fact grounding verification.
         """
         output = dict(raw_output)
         action = output.get("action", "send")
@@ -82,6 +84,19 @@ class OutputValidator:
             body = (output.get("body") or "").strip()
             if not body:
                 body = "Understood! Proceeding with the discussed update."
+
+            # Fact Grounding Verification against input projection
+            if projection:
+                facts = FactRegistry.extract_allowed_facts(projection)
+                is_grounded, issues = FactRegistry.verify_grounding(body, facts)
+                if not is_grounded:
+                    from vera.llm_client import _generate_grounded_fallback
+                    fallback = _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_message)
+                    body = fallback.get("body", body)
+                    output["action"] = fallback.get("action", "send")
+                    output["cta"] = fallback.get("cta", "binary_yes_no")
+                    output["rationale"] = f"Grounding repair applied: {fallback.get('rationale', '')}"
+
             # Anti-repetition: if exact same reply body was already sent, switch to wait to avoid repetitive looping
             body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
             if body_hash in previous_body_hashes:
