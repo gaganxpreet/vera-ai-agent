@@ -58,23 +58,29 @@ OPT_OUT_PATTERNS = [
     r"please stop"
 ]
 
-ACCEPTANCE_PATTERNS = [
+EXPLICIT_ACCEPTANCE_PATTERNS = [
     r"\byes\b",
     r"\byep\b",
     r"\byeah\b",
-    r"\bsure\b",
-    r"\bok\b",
-    r"\bokay\b",
     r"go ahead",
     r"let'?s do it",
     r"send it",
-    r"send me",
-    r"i want to join",
     r"proceed",
-    r"please send",
     r"sounds good",
-    r"draft the",
-    r"schedule"
+    r"please send the draft",
+    r"i want to join",
+    r"activate it",
+    r"confirm"
+]
+
+ACTION_REQUEST_PATTERNS = [
+    r"can you schedule",
+    r"could you schedule",
+    r"schedule it for",
+    r"book it for",
+    r"reserve for",
+    r"send to my email",
+    r"set it up for"
 ]
 
 class ConversationStore:
@@ -123,7 +129,7 @@ class ConversationStore:
     def classify_inbound(self, message: str) -> str:
         text = message.lower().strip()
         
-        # 1. Opt-out check
+        # 1. Opt-out check (Highest Priority Terminal)
         for pattern in OPT_OUT_PATTERNS:
             if re.search(pattern, text):
                 return "OPT_OUT"
@@ -132,21 +138,21 @@ class ConversationStore:
         for pattern in AUTO_REPLY_PATTERNS:
             if re.search(pattern, text):
                 return "AUTO_REPLY"
-                
-        # 3. Acceptance / Commitment check
-        # If clear acceptance phrases are present (e.g. "ok let's do it", "go ahead", "send it"),
-        # prioritize ACTION transition even if followed by conversational inquiry like "What's next?"
-        has_acceptance = any(re.search(pattern, text) for pattern in ACCEPTANCE_PATTERNS)
-        has_parameter_question = any(w in text for w in ["can you", "could you", "is it possible", "how much", "what time", "schedule it for"])
 
-        if has_acceptance and not has_parameter_question:
-            return "ACCEPTANCE"
+        # 3. Action Request check (e.g. "Can you schedule it for Friday?")
+        for pattern in ACTION_REQUEST_PATTERNS:
+            if re.search(pattern, text):
+                return "ACTION_REQUEST"
 
-        # 4. Question / parameter check
-        if "?" in text or any(w in text for w in ["what", "how", "why", "when", "where", "can you", "could you", "is it possible"]):
+        # 4. Question / Inquiry check
+        if "?" in text or any(w in text for w in ["what", "how", "why", "when", "where", "can you", "could you", "is it possible", "how much", "what does"]):
+            # If explicit acceptance also present e.g. "Ok let's do it. What's next?"
+            if any(re.search(pattern, text) for pattern in EXPLICIT_ACCEPTANCE_PATTERNS):
+                return "ACCEPTANCE"
             return "QUESTION"
 
-        if has_acceptance:
+        # 5. Explicit Acceptance / Commitment check
+        if any(re.search(pattern, text) for pattern in EXPLICIT_ACCEPTANCE_PATTERNS) or text in ["ok", "okay", "sure", "yes", "yep", "do it"]:
             return "ACCEPTANCE"
             
         return "GENERAL"

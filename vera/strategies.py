@@ -128,27 +128,30 @@ def derive_strategy_from_trigger(
     # 1. Determine send_as
     send_as = "merchant_on_behalf" if (scope == "customer" or cid) else "vera"
 
-    # 2. Determine compulsion lever & CTA
-    if any(k in payload_keys for k in ["deadline", "expires_at", "days_remaining", "deadline_iso"]):
+    # 2. Determine compulsion lever & CTA using semantic alias normalization
+    if any(k in payload_keys for k in ["deadline", "expires_at", "days_remaining", "deadline_iso", "due_date"]):
         lever = "urgency_loss_aversion"
         cta = "binary_yes_no"
-    elif any(k in payload_keys for k in ["delta_pct", "drop", "dip", "loss", "metric_drop"]):
+    elif any(k in payload_keys for k in ["delta_pct", "drop", "dip", "loss", "metric_drop", "change", "decline", "pct_change"]):
         lever = "loss_aversion_effort_externalization"
         cta = "binary_yes_no"
-    elif any(k in payload_keys for k in ["surge", "spike", "milestone", "review_count"]):
+    elif any(k in payload_keys for k in ["surge", "spike", "milestone", "review_count", "achievement", "threshold", "milestone_value"]):
         lever = "social_proof_momentum"
         cta = "binary_yes_no"
-    elif any(k in payload_keys for k in ["citation", "trial", "study", "research", "journal", "digest"]):
+    elif any(k in payload_keys for k in ["citation", "trial", "study", "research", "journal", "digest", "top_item_id"]):
         lever = "curiosity_reciprocity"
         cta = "open_ended"
-    elif any(k in payload_keys for k in ["competitor", "distance_km", "market"]):
+    elif any(k in payload_keys for k in ["competitor", "distance_km", "market", "nearby"]):
         lever = "curiosity_competitive_awareness"
         cta = "open_ended" if send_as == "vera" else "binary_yes_no"
-    elif any(k in payload_keys for k in ["festival", "weather", "match", "holiday"]):
+    elif any(k in payload_keys for k in ["festival", "weather", "match", "holiday", "event", "occasion", "season"]):
         lever = "timely_opportunity"
         cta = "binary_yes_no"
-    elif any(k in payload_keys for k in ["renewal", "expiry", "subscription", "plan"]):
+    elif any(k in payload_keys for k in ["renewal", "expiry", "subscription", "plan", "days_left"]):
         lever = "urgency_continuity"
+        cta = "binary_yes_no"
+    elif any(k in payload_keys for k in ["molecule_list", "refill", "recall", "available_slots", "last_refill", "chronic"]):
+        lever = "effort_externalization"
         cta = "binary_yes_no"
     elif send_as == "merchant_on_behalf":
         lever = "effort_externalization"

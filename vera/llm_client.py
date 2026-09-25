@@ -400,7 +400,11 @@ class LLMClient:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={self.api_key}"
                 body = {
                     "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
-                    "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1000}
+                    "generationConfig": {
+                        "temperature": 0.0,
+                        "maxOutputTokens": 1000,
+                        "responseMimeType": "application/json"
+                    }
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     resp = await client.post(url, json=body)
@@ -418,7 +422,8 @@ class LLMClient:
                         {"role": "user", "content": user_prompt}
                     ],
                     "temperature": 0.0,
-                    "max_tokens": 1000
+                    "max_tokens": 1000,
+                    "response_format": {"type": "json_object"}
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     resp = await client.post(

@@ -8,22 +8,22 @@ def project_context_for_trigger(
 ) -> Dict[str, Any]:
     """
     Minimizes context down to only the facts relevant to this trigger.
-    Never sends full 500KB blobs or entire digests.
+    Avoids sending large blobs, unrelated offers, or full digests.
     """
     kind = trigger.get("kind", "")
     t_payload = trigger.get("payload", {})
 
-    # 1. Project Trigger Facts
+    # 1. Project Trigger Facts (omit raw unparsed placeholders)
+    clean_payload = {k: v for k, v in t_payload.items() if k != "placeholder"}
     projected_trigger = {
         "id": trigger.get("id"),
         "kind": kind,
-        "scope": trigger.get("scope"),
-        "source": trigger.get("source"),
-        "urgency": trigger.get("urgency"),
-        "payload": t_payload
+        "scope": trigger.get("scope", "merchant"),
+        "urgency": trigger.get("urgency", 3),
+        "payload": clean_payload
     }
 
-    # 2. Project Merchant Facts
+    # 2. Project Merchant Facts (tailored per trigger kind)
     projected_merchant = {}
     if merchant:
         ident = merchant.get("identity", {})
@@ -31,49 +31,69 @@ def project_context_for_trigger(
             "merchant_id": merchant.get("merchant_id"),
             "name": ident.get("name") or merchant.get("name"),
             "owner_first_name": ident.get("owner_first_name") or merchant.get("owner_first_name"),
-            "city": ident.get("city") or merchant.get("city"),
             "locality": ident.get("locality") or merchant.get("locality"),
-            "languages": ident.get("languages") or merchant.get("languages", ["en"]),
-            "signals": merchant.get("signals", [])
+            "city": ident.get("city") or merchant.get("city"),
+            "languages": ident.get("languages") or merchant.get("languages", ["en"])
         }
-        
-        # Include specific performance numbers if perf trigger or relevant
-        if "perf" in kind or kind in ["renewal_due", "milestone_reached"]:
-            projected_merchant["performance"] = merchant.get("performance", {})
+
+        # Include performance/subscription strictly when relevant
+        if "perf" in kind:
+            perf = merchant.get("performance", {})
+            metric = t_payload.get("metric", "views")
+            projected_merchant["performance"] = {
+                "window_days": perf.get("window_days", 30),
+                metric: perf.get(metric),
+                "delta_7d": perf.get("delta_7d", {})
+            }
+        elif kind == "renewal_due":
             projected_merchant["subscription"] = merchant.get("subscription", {})
-            
-        if "customer" in kind or "recall" in kind:
-            projected_merchant["customer_aggregate"] = merchant.get("customer_aggregate", {})
+        elif "milestone" in kind:
+            perf = merchant.get("performance", {})
+            projected_merchant["performance"] = {
+                "views": perf.get("views"),
+                "leads": perf.get("leads")
+            }
 
-        # Include active offers
+        # Include relevant active offer (single best offer)
         active_offers = [o for o in merchant.get("offers", []) if o.get("status") == "active"]
-        projected_merchant["active_offers"] = active_offers[:3]
+        if active_offers:
+            projected_merchant["active_offers"] = [active_offers[0]]
 
-    # 3. Project Category Facts
+    # 3. Project Category Facts (strictly isolated)
     projected_category = {}
     if category:
         projected_category = {
             "slug": category.get("slug"),
-            "voice": category.get("voice", {}),
-            "peer_stats": category.get("peer_stats", {})
+            "voice": category.get("voice", {})
         }
-        
-        # Only extract the relevant digest item if this is a research / regulation / compliance trigger
+
+        # Only extract the targeted digest item if research/compliance
         top_item_id = t_payload.get("top_item_id")
         if top_item_id:
-            digest_items = category.get("digest", [])
-            for item in digest_items:
+            for item in category.get("digest", []):
                 if item.get("id") == top_item_id:
-                    projected_category["target_digest_item"] = item
+                    projected_category["target_digest_item"] = {
+                        "title": item.get("title"),
+                        "source": item.get("source"),
+                        "trial_n": item.get("trial_n"),
+                        "summary": item.get("summary")
+                    }
                     break
 
-        # If festival / weather / seasonal
-        if "festival" in kind or "weather" in kind or "seasonal" in kind:
-            projected_category["seasonal_beats"] = category.get("seasonal_beats", [])
-            projected_category["trend_signals"] = category.get("trend_signals", [])
+        # If performance dip, include only relevant peer benchmark
+        if "perf" in kind:
+            peer = category.get("peer_stats", {})
+            projected_category["peer_benchmark"] = {
+                "avg_rating": peer.get("avg_rating"),
+                "avg_views_30d": peer.get("avg_views_30d"),
+                "avg_calls_30d": peer.get("avg_calls_30d")
+            }
 
-        # Include canonical offer catalog sample
-        projected_category["offer_catalog"] = category.get("offer_catalog", [])[:3]
+        # Only include canonical offer if customer reactivation or recall
+        if "recall" in kind or "winback" in kind:
+            offers = category.get("offer_catalog", [])
+            if offers:
+                projected_category["offer_catalog"] = [offers[0]]
 
     # 4. Project Customer Facts (only if customer-scoped)
     projected_customer = None
@@ -84,8 +104,6 @@ def project_context_for_trigger(
             "name": c_ident.get("name") or customer.get("name"),
             "language_pref": c_ident.get("language_pref") or customer.get("language_pref", "en"),
             "relationship": customer.get("relationship", {}),
-            "state": customer.get("state"),
-            "preferences": customer.get("preferences", {}),
             "consent": customer.get("consent", {})
         }
 

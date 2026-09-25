@@ -47,10 +47,10 @@ class OutputValidator:
                 output["body"] = fallback["body"]
                 body = fallback["body"]
 
-        # 5. Anti-repetition check
+        # 5. Anti-repetition check: if body hash already sent in this thread, discard to avoid duplicate messaging
         body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
         if body_hash in previous_body_hashes:
-            output["body"] = f"Following up on our earlier note: {body}"
+            return None # Suppress duplicate send
 
         # 6. Template metadata
         if not output.get("template_name"):

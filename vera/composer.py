@@ -55,6 +55,8 @@ class MessageComposer:
             previous_body_hashes=conv_state.previous_body_hashes,
             projection=projection
         )
+        if not validated:
+            return None # Suppressed duplicate
 
         # Update conversation state & mark suppression
         suppression_key = trigger.get("suppression_key", f"trg:{trigger_id}")

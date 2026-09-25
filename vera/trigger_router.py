@@ -89,35 +89,56 @@ class TriggerRouter:
                 merchant=merchant
             )
 
-            # 7. Multi-Factor Priority Scoring
-            # Priority = Urgency (0-50) + Business Impact (0-25) + Freshness (0-15) + Actionability (0-10)
+            # 7. Multi-Factor Priority Scoring with Payload-level Business Intelligence
+            # Priority = Urgency (10-50) + Impact (0-30) + Freshness (0-15) + Actionability (0-15) - LowValuePenalty
             urgency_raw = trigger_data.get("urgency", 3)
             urgency_score = min(50, max(10, int(urgency_raw) * 10))
 
             kind = trigger_data.get("kind", "")
-            if kind in ["regulation_change"]:
-                impact_score = 25
-            elif kind in ["recall_due", "renewal_due", "perf_dip"]:
-                impact_score = 20
-            elif kind in ["perf_spike", "festival_upcoming", "competitor_opened"]:
-                impact_score = 15
-            else:
-                impact_score = 10
+            payload = trigger_data.get("payload", {})
 
+            # Impact score: dynamic based on severity & commercial significance
+            impact_score = 10
+            delta_val = payload.get("delta_pct") or payload.get("change") or payload.get("drop")
+            if delta_val is not None:
+                # E.g. -0.40 drop -> high impact (up to 30 pts)
+                severity = abs(float(delta_val))
+                impact_score = min(30, int(20 + severity * 20))
+            elif kind in ["regulation_change"]:
+                impact_score = 28
+            elif kind in ["renewal_due"]:
+                days_rem = payload.get("days_remaining") or (merchant.get("subscription", {}).get("days_remaining"))
+                impact_score = 25 if (days_rem is not None and days_rem <= 15) else 18
+            elif kind in ["recall_due", "chronic_refill_due"]:
+                impact_score = 22
+            elif kind in ["perf_spike", "milestone_reached"]:
+                impact_score = 18
+            elif kind in ["festival_upcoming", "competitor_opened"]:
+                impact_score = 16
+            elif kind in ["curious_ask_due", "scheduled_recurring"]:
+                impact_score = 8 # Lower priority for generic recurring checks
+
+            # Freshness score: proximity to deadline / recent event
             freshness_score = 5
             if expires_at and now_dt:
                 try:
                     exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
                     diff_hours = (exp_dt - now_dt).total_seconds() / 3600.0
                     if 0 < diff_hours <= 24:
-                        freshness_score = 15 # Imminent deadline bonus
+                        freshness_score = 15 # Imminent deadline
                     elif 24 < diff_hours <= 72:
                         freshness_score = 10
                 except Exception:
                     pass
 
-            payload = trigger_data.get("payload", {})
-            actionability_score = 10 if payload else 2
+            # Actionability: presence of actionable offers, trial citations, or explicit customer data
+            actionability_score = 5
+            if payload.get("available_slots") or payload.get("molecule_list") or payload.get("top_item_id"):
+                actionability_score = 15
+            elif payload.get("delta_pct") or payload.get("festival") or payload.get("intent_topic"):
+                actionability_score = 12
+            elif payload.get("placeholder"):
+                actionability_score = 2 # Placeholder trigger without concrete facts
 
             total_priority = urgency_score + impact_score + freshness_score + actionability_score
 
