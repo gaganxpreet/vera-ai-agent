@@ -109,16 +109,26 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     elif kind == "regulation_change":
         deadline = t_payload.get("deadline_iso")
         item = category.get("target_digest_item", {})
-        title = item.get("title", "regulatory guidelines update")
-        source = item.get("source", "Official Council Circular")
+        title = item.get("title")
+        source = item.get("source")
         deadline_phrase = f" with effective deadline {deadline}" if deadline else ""
+        if title and source:
+            body_text = f"Dr. {owner_name}, compliance update: {source} published {title}{deadline_phrase}. Want me to send the 3-point checklist to ensure {merchant.get('name')} is fully compliant?"
+            t_params = [f"Dr. {owner_name}", str(deadline or "upcoming"), source]
+        elif title:
+            body_text = f"Dr. {owner_name}, new compliance guidance{deadline_phrase}: {title}. Want me to send the key compliance checklist for {merchant.get('name')}?"
+            t_params = [f"Dr. {owner_name}", str(deadline or "upcoming"), title[:30]]
+        else:
+            # No specific title/source available — skip specific claim
+            body_text = f"Dr. {owner_name}, there's a regulatory update relevant to {merchant.get('name')}{deadline_phrase}. Want me to share the compliance checklist?"
+            t_params = [f"Dr. {owner_name}", str(deadline or "")]
         return {
-            "body": f"Dr. {owner_name}, compliance update: {source} published {title}{deadline_phrase}. Want me to send the 3-point checklist to ensure {merchant.get('name')} is fully compliant?",
+            "body": body_text,
             "cta": "binary_yes_no",
             "template_name": "vera_compliance_alert_v1",
-            "template_params": [f"Dr. {owner_name}", str(deadline or "upcoming"), source],
+            "template_params": t_params,
             "send_as": "vera",
-            "rationale": "Provides exact compliance deadline and regulatory citation with binary checklist offer."
+            "rationale": "Compliance alert with source/deadline anchored on actual data; no invented defaults."
         }
 
     elif kind == "recall_due":
@@ -166,16 +176,16 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             d7 = merchant.get("performance", {}).get("delta_7d", {})
             delta_val = d7.get(f"{metric}_pct") or d7.get("calls_pct") or d7.get("views_pct")
 
-        delta_phrase = f"dipped {int(round(abs(delta_val)*100))}%" if delta_val is not None else "dipped"
+        delta_phrase = f"dipped {int(round(abs(delta_val)*100))}%" if delta_val is not None else "dipped recently"
         window = t_payload.get("window")
         window_phrase = f" over the past {window}" if window else ""
         return {
-            "body": f"Hi {owner_name}, noticed {metric} {delta_phrase}{window_phrase} for {merchant.get('name')}. We can refresh your GBP post and spotlight active offers to recover momentum. Shall I prepare the draft for you?",
+            "body": f"Hi {owner_name}, {metric} {delta_phrase}{window_phrase} for {merchant.get('name')}. Refreshing your profile spotlight and active offers can help recover momentum quickly. Want me to show you the recommended actions?",
             "cta": "binary_yes_no",
             "template_name": "vera_perf_dip_v1",
             "template_params": [owner_name, metric, delta_phrase],
             "send_as": "vera",
-            "rationale": "Diagnosis anchored on exact performance metric delta with immediate recovery draft offer."
+            "rationale": "Diagnosis anchored on exact performance metric delta; asks permission before taking any action."
         }
 
     elif kind == "renewal_due":
@@ -200,10 +210,10 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         loc = merchant.get("locality") or "your area"
 
         if fest:
-            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Demand across {loc} usually surges for festive appointments. I've drafted a festive promotion ready to publish to Google & WhatsApp. Want me to send the preview?"
+            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Demand across {loc} usually surges for festive appointments. Want me to draft a festive promotion for Google & WhatsApp to capture that traffic?"
             fest_param = fest
         else:
-            body_text = f"Hi {owner_name}, peak seasonal customer demand is approaching for {loc}. I've prepared a customized promotion draft for {merchant.get('name')} to publish to Google & WhatsApp. Want me to send the preview?"
+            body_text = f"Hi {owner_name}, peak seasonal customer demand is approaching for {loc}. Want me to draft a seasonal promotion for {merchant.get('name')} to publish to Google & WhatsApp?"
             fest_param = "Seasonal Demand"
 
         return {
@@ -212,7 +222,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             "template_name": "vera_festival_campaign_v1",
             "template_params": [owner_name, fest_param, str(days or "soon")],
             "send_as": "vera",
-            "rationale": "Leverages upcoming festive timeline with pre-built merchant campaign preview."
+            "rationale": "Leverages upcoming festive timeline with proactive offer to draft promotional campaign."
         }
 
     elif kind == "wedding_package_followup":
@@ -248,12 +258,12 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         program = t_payload.get("intent_topic") or t_payload.get("program_title") or "new program package"
         clean_prog = program.replace("_", " ").title()
         return {
-            "body": f"Hi {owner_name}, drafted a campaign outline for {merchant.get('name')} around {clean_prog}. Ready to review and schedule for this weekend. Shall I send the 3-line preview?",
+            "body": f"Hi {owner_name}, we can set up a campaign outline for {merchant.get('name')} around {clean_prog}. Want me to draft the 3-line preview for you to review?",
             "cta": "binary_yes_no",
             "template_name": "vera_planning_v1",
             "template_params": [owner_name, clean_prog],
             "send_as": "vera",
-            "rationale": "High-intent program planning draft externalizing effort with a quick preview binary ask."
+            "rationale": "High-intent program planning offer externalizing effort with a quick preview binary ask."
         }
 
     elif "appointment" in kind:
@@ -294,7 +304,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
                 count_phrase = "reached a verified performance milestone"
 
         return {
-            "body": f"Congratulations {owner_name}! {merchant.get('name')} just {count_phrase} on your profile. I've drafted a celebratory update to share with your customers. Want me to send the draft?",
+            "body": f"Congratulations {owner_name}! {merchant.get('name')} just {count_phrase} on your profile. Want me to draft a celebratory update to share with your customers?",
             "cta": "binary_yes_no",
             "template_name": "vera_milestone_v1",
             "template_params": [owner_name, str(count or "milestone")],
