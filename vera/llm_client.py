@@ -220,10 +220,10 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         loc_phrase = f" across {loc}" if loc else ""
 
         if fest:
-            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Demand{loc_phrase} usually surges for festive appointments. Want me to draft a festive promotion for Google & WhatsApp to capture that traffic?"
+            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Festive demand{loc_phrase} picks up for bookings and services. Want me to draft a {fest} promotion for {merchant.get('name')} to publish across Google & WhatsApp?"
             fest_param = fest
         else:
-            body_text = f"Hi {owner_name}, peak seasonal customer demand is approaching{loc_phrase}. Want me to draft a seasonal promotion for {merchant.get('name')} to publish to Google & WhatsApp?"
+            body_text = f"Hi {owner_name}, peak seasonal demand is approaching{loc_phrase}. Want me to draft a seasonal promotion for {merchant.get('name')} to publish across Google & WhatsApp?"
             fest_param = "Seasonal Demand"
 
         return {
@@ -347,7 +347,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         loc = merchant.get("locality")
         loc_phrase = f" in {loc}" if loc else ""
         return {
-            "body": f"Hi {owner_name}, a new competitor opened{dist_phrase}{loc_phrase}. To maintain your search visibility lead for {merchant.get('name')}, I suggest updating your featured offers. Want to see the recommendations?",
+            "body": f"Hi {owner_name}, a new competitor opened{dist_phrase}{loc_phrase}. To keep {merchant.get('name')} visible and competitive in search results, I suggest refreshing your featured offers and profile. Want to see the recommendations?",
             "cta": "binary_yes_no",
             "template_name": "vera_competitor_alert_v1",
             "template_params": [owner_name, str(dist or loc or "nearby")],
@@ -479,7 +479,7 @@ class LLMClient:
             self.api_key = None
 
     async def acomplete(self, system_prompt: str, user_prompt: str) -> Optional[str]:
-        """Non-blocking async completion using httpx."""
+        """Non-blocking async completion using httpx. Returns None on any failure to trigger grounded fallback."""
         if not self.api_key:
             return None
 
@@ -500,6 +500,12 @@ class LLMClient:
                     if resp.status_code == 200:
                         data = resp.json()
                         return data["candidates"][0]["content"]["parts"][0]["text"]
+                    elif resp.status_code == 429:
+                        logger.warning("Gemini quota exhausted (HTTP 429) — using grounded fallback")
+                        return None
+                    else:
+                        logger.warning(f"Gemini HTTP {resp.status_code} — using grounded fallback")
+                        return None
 
             elif self.provider in ["openai", "groq"]:
                 base_url = "https://api.openai.com/v1" if self.provider == "openai" else "https://api.groq.com/openai/v1"
@@ -523,6 +529,15 @@ class LLMClient:
                     if resp.status_code == 200:
                         data = resp.json()
                         return data["choices"][0]["message"]["content"]
+                    elif resp.status_code == 429:
+                        logger.warning(f"{self.provider} quota exhausted (HTTP 429) — using grounded fallback")
+                        return None
+                    else:
+                        logger.warning(f"{self.provider} HTTP {resp.status_code} — using grounded fallback")
+                        return None
+        except httpx.TimeoutException:
+            logger.warning(f"LLM request timed out ({self.provider}) — using grounded fallback")
+            return None
         except Exception as e:
             logger.warning(f"Async LLM call failed ({self.provider}): {e}")
             return None

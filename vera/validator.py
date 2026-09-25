@@ -53,8 +53,9 @@ class OutputValidator:
                     output["body"] = body
                     output["template_name"] = fallback.get("template_name", template_name)
                     output["template_params"] = fallback.get("template_params", [])
-                    output["cta"] = fallback.get("cta", expected_cta)
-                    output["send_as"] = fallback.get("send_as", expected_send_as)
+                    # Always re-enforce authoritative strategy values — fallback cannot override
+                    output["cta"] = expected_cta
+                    output["send_as"] = expected_send_as
                 else:
                     return None  # If fallback also fails grounding, suppress rather than sending ungrounded text
 

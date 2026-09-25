@@ -9,7 +9,7 @@ class Settings(BaseModel):
     # LLM Settings
     llm_provider: str = Field(default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini"))
     gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")))
-    gemini_model: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
+    gemini_model: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
     
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     openai_model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
@@ -23,7 +23,7 @@ class Settings(BaseModel):
     # Bot Metadata
     team_name: str = Field(default_factory=lambda: os.getenv("TEAM_NAME", "Team Vera AI Engine"))
     team_members: list[str] = Field(default_factory=lambda: [os.getenv("TEAM_MEMBER", "Gaganpreet Singh")])
-    model_name: str = Field(default_factory=lambda: os.getenv("BOT_MODEL_NAME", "gemini-1.5-flash"))
+    model_name: str = Field(default_factory=lambda: os.getenv("BOT_MODEL_NAME", "gemini-3.8-flash"))
     approach: str = Field(default_factory=lambda: os.getenv("BOT_APPROACH", "Deterministic context-projected strategy router with async structured LLM composition, FactRegistry validation & bounded state machine"))
     contact_email: str = Field(default_factory=lambda: os.getenv("CONTACT_EMAIL", "gaganxpreet@gmail.com"))
     submitted_at: str = Field(default_factory=lambda: os.getenv("SUBMITTED_AT", "2026-09-26T00:00:00Z"))
