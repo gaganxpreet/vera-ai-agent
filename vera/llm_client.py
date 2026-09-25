@@ -367,14 +367,14 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         }
 
     # Default fallback
-    loc = merchant.get("locality") or "your area"
+    loc_phrase = f" in {merchant.get('locality')}" if merchant.get('locality') else ""
     return {
-        "body": f"Hi {owner_name}, check-in from Vera for {merchant.get('name')}. We noticed new local search activity in {loc}. Would you like a quick overview of your weekly visibility and recommendations?",
+        "body": f"Hi {owner_name}, check-in from Vera for {merchant.get('name')}{loc_phrase}. Would you like a quick overview of your profile performance and recommended growth actions for this week?",
         "cta": "binary_yes_no",
         "template_name": "vera_checkin_v1",
         "template_params": [owner_name],
         "send_as": "vera",
-        "rationale": "General grounded check-in anchored on merchant locality and search visibility."
+        "rationale": "General grounded check-in offering merchant performance overview without asserting unverified activity facts."
     }
 
 class LLMClient:

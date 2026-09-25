@@ -108,10 +108,23 @@ class FactRegistry:
             if clean_c not in allowed_nums and str(int(float(clean_c))) not in allowed_nums:
                 issues.append(f"Ungrounded currency claim: ₹{c}")
 
-        # Extract percentages
-        percentages = re.findall(r'\b(\d+(?:\.\d+)?)\s*%', body)
-        for p in percentages:
-            if p not in allowed_nums and f"{p}%" not in allowed_nums and str(int(float(p))) not in allowed_nums:
-                issues.append(f"Ungrounded percentage claim: {p}%")
+        # Extract distances e.g. 1.3km or 1.3 km
+        distances = re.findall(r'\b(\d+(?:\.\d+)?)\s*km\b', body, re.IGNORECASE)
+        for d in distances:
+            if d not in allowed_nums and str(int(float(d))) not in allowed_nums:
+                issues.append(f"Ungrounded distance claim: {d}km")
+
+        # Extract trial sample sizes e.g. n=2100 or n = 2100
+        trials = re.findall(r'\bn\s*=\s*(\d+)\b', body, re.IGNORECASE)
+        for t in trials:
+            if t not in allowed_nums:
+                issues.append(f"Ungrounded clinical trial sample size: n={t}")
+
+        # Extract YYYY-MM-DD date claims
+        dates = re.findall(r'\b(\d{4}-\d{2}-\d{2})\b', body)
+        allowed_dates = facts.get("allowed_dates", set())
+        for dt in dates:
+            if dt.lower() not in allowed_dates:
+                issues.append(f"Ungrounded specific date claim: {dt}")
 
         return len(issues) == 0, issues

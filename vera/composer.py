@@ -38,8 +38,9 @@ class MessageComposer:
         # Build projected minimal context view
         projection = project_context_for_trigger(category, merchant, trigger, customer)
         
-        # Conversation identifier
-        conv_id = f"conv_{mid}_{trigger.get('kind')}_{uuid.uuid4().hex[:6]}"
+        # Deterministic conversation identifier based on entity keys
+        target_cid = cid or "all"
+        conv_id = f"conv_{mid}_{target_cid}_{trigger_id}"
         conv_state = conversation_store.get_or_create(conv_id, merchant_id=mid, customer_id=cid)
 
         # Build prompt & query LLM (non-blocking async — does not stall the event loop)
