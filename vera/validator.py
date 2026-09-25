@@ -1,3 +1,4 @@
+import hashlib
 from typing import Dict, Any, List, Optional
 from vera.models import ProactiveAction
 
@@ -33,9 +34,9 @@ class OutputValidator:
         output["body"] = body
 
         # 4. Anti-repetition check
-        body_hash = str(hash(body))
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
         if body_hash in previous_body_hashes:
-            output["body"] = f"{body} (Updated note: let me know if this works for you!)"
+            output["body"] = f"Following up on our earlier note: {body}"
 
         # 5. Template metadata
         if not output.get("template_name"):
@@ -68,9 +69,9 @@ class OutputValidator:
             if not body:
                 body = "Understood! Proceeding with the discussed update."
             # Anti-repetition
-            body_hash = str(hash(body))
+            body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
             if body_hash in previous_body_hashes:
-                body = f"{body} Reaching out to confirm our next step."
+                body = f"Following up to confirm our next step: {body}"
             output["body"] = body
             
             cta = output.get("cta")

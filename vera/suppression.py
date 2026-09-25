@@ -40,6 +40,13 @@ class SuppressionManager:
         if customer_id:
             self._opted_out_customers.add(customer_id)
 
+    def is_opted_out(self, merchant_id: Optional[str] = None, customer_id: Optional[str] = None) -> bool:
+        if merchant_id and merchant_id in self._opted_out_merchants:
+            return True
+        if customer_id and customer_id in self._opted_out_customers:
+            return True
+        return False
+
     def clear(self):
         self._suppressed_keys.clear()
         self._opted_out_merchants.clear()

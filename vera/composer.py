@@ -87,6 +87,16 @@ class MessageComposer:
         """
         conv_state = conversation_store.get_or_create(conversation_id, merchant_id=merchant_id, customer_id=customer_id)
         
+        # 0. Immediate guard: if conversation or participant is already opted out, cease all communication immediately
+        if conv_state.opt_out or conv_state.status == "OPTED_OUT" or (conv_state.merchant_id and suppression_manager.is_opted_out(conv_state.merchant_id)):
+            conv_state.opt_out = True
+            conv_state.status = "OPTED_OUT"
+            conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message, action="end")
+            return ReplyResponse(
+                action="end",
+                rationale="Merchant or conversation has already opted out. Ceased all further outreach."
+            )
+
         # 1. Classify inbound intent
         inbound_intent = conversation_store.classify_inbound(inbound_message)
         conv_state.intent = inbound_intent
@@ -139,9 +149,13 @@ class MessageComposer:
         category = context_store.get("category", category_slug) if category_slug else None
         customer = context_store.get("customer", conv_state.customer_id) if conv_state.customer_id else None
 
-        # Build minimal projected context
-        dummy_trigger = {"kind": "conversation_reply", "payload": {}}
-        projection = project_context_for_trigger(category, merchant, dummy_trigger, customer)
+        # Build projected context: preserve original trigger details if available
+        original_trigger = None
+        if conv_state.last_trigger_id:
+            original_trigger = context_store.get("trigger", conv_state.last_trigger_id)
+
+        target_trigger = original_trigger or {"kind": "conversation_reply", "payload": {}}
+        projection = project_context_for_trigger(category, merchant, target_trigger, customer)
 
         recent_turns = [{"role": t.role, "message": t.message} for t in conv_state.turns[-4:]]
 

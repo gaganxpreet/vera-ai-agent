@@ -68,11 +68,11 @@ async def push_context(req: ContextPushRequest):
 
 @app.post("/v1/tick", response_model=TickResponse)
 async def tick(req: TickRequest):
-    # Trigger routing & ranking
-    ranked_triggers = trigger_router.evaluate_triggers(req.available_triggers)
+    # Trigger routing, expiry check against current timestamp, and priority ranking
+    ranked_triggers = trigger_router.evaluate_triggers(req.available_triggers, now=req.now)
     
-    # Cap at 20 actions per tick as per challenge specs
-    max_actions = 20
+    # Select high-confidence actionable triggers (capped to top 5 per tick to ensure sub-second response)
+    max_actions = 5
     actions: List[ProactiveAction] = []
     
     for item in ranked_triggers[:max_actions]:

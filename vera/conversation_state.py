@@ -1,4 +1,5 @@
 import re
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -116,7 +117,7 @@ class ConversationStore:
         if role in ["vera", "merchant_on_behalf"]:
             state.last_bot_message = message
             state.first_outbound_sent = True
-            body_hash = str(hash(message.strip()))
+            body_hash = hashlib.sha256(message.strip().encode("utf-8")).hexdigest()
             state.previous_body_hashes.append(body_hash)
 
     def classify_inbound(self, message: str) -> str:
@@ -133,13 +134,20 @@ class ConversationStore:
                 return "AUTO_REPLY"
                 
         # 3. Acceptance / Commitment check
-        for pattern in ACCEPTANCE_PATTERNS:
-            if re.search(pattern, text):
-                return "ACCEPTANCE"
-                
-        # 4. Question / inquiry check
-        if "?" in text or any(w in text for w in ["what", "how", "why", "when", "where", "can you", "could you"]):
+        # If clear acceptance phrases are present (e.g. "ok let's do it", "go ahead", "send it"),
+        # prioritize ACTION transition even if followed by conversational inquiry like "What's next?"
+        has_acceptance = any(re.search(pattern, text) for pattern in ACCEPTANCE_PATTERNS)
+        has_parameter_question = any(w in text for w in ["can you", "could you", "is it possible", "how much", "what time", "schedule it for"])
+
+        if has_acceptance and not has_parameter_question:
+            return "ACCEPTANCE"
+
+        # 4. Question / parameter check
+        if "?" in text or any(w in text for w in ["what", "how", "why", "when", "where", "can you", "could you", "is it possible"]):
             return "QUESTION"
+
+        if has_acceptance:
+            return "ACCEPTANCE"
             
         return "GENERAL"
 
