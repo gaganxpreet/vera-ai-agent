@@ -1,73 +1,83 @@
 # magicpin Vera AI Challenge — Candidate Bot Implementation
 
-## 1. Approach Overview
+## 1. Architecture Overview
 
-This solution implements a deterministic, stateful message composition engine for magicpin's Vera assistant. The architecture strictly decouples decision routing, state tracking, and minimal context projection from LLM generation:
+This solution implements a deterministic, stateful, context-grounded message composition engine for magicpin's Vera assistant. The architecture decouples trigger eligibility, multi-factor decision ranking, minimal context projection, async LLM generation, and deterministic fact verification:
 
 ```
 [Inbound Context / Triggers]
             │
     ┌───────▼────────┐
-    │  Context Store │ (Versioned atomic upsert & idempotency)
+    │  Context Store │ (Thread-safe versioned upsert & 409 conflict detection)
     └───────┬────────┘
             │
     ┌───────▼────────┐
-    │ Trigger Router │ (Urgency scoring, consent & suppression checks)
+    │ Trigger Router │ (Simulated now expiry, consent check, suppression & multi-factor ranking)
     └───────┬────────┘
             │
     ┌───────▼────────┐
-    │Context Selector│ (Minimal token projection per vertical & trigger)
+    │Context Selector│ (Minimal token projection per vertical & trigger kind)
     └───────┬────────┘
             │
     ┌───────▼────────┐
-    │ Strategy & LLM │ (Multi-provider abstraction: Gemini / OpenAI / Groq / Fallback)
+    │ Async LLM / FB │ (Async httpx client with provider abstraction: Gemini / OpenAI / Groq)
     └───────┬────────┘
             │
     ┌───────▼────────┐
-    │Rule Validator  │ (Deterministic validation, repair, & anti-repetition)
+    │ Fact Validator │ (FactRegistry boundary check for numbers/currency/%/dates & anti-repetition)
     └───────┬────────┘
             │
    [Grounded WhatsApp Action]
 ```
 
-## 2. Key Architecture Decisions & Tradeoffs
+## 2. Key Architectural Components
 
 1. **Context Projection over Monolithic Injection**:
-   - Rather than dumping the full multi-megabyte dataset or full digests into prompts, `context_selector.py` isolates only linked merchant identity, exact metrics/deltas, category voice profile, and the single targeted digest item.
-   - *Tradeoff*: Context projection substantially reduces prompt size and eliminates token waste while bounding processing latency; external LLM latency remains provider-dependent.
+   - Rather than dumping multi-megabyte payloads or full digests into prompts, `context_selector.py` isolates only linked merchant identity, exact metrics/deltas, category voice profile, and the single targeted digest item.
+   - Substantially minimizes prompt size, avoids context overflow, and keeps execution latency bounded.
 
 2. **Stateful Conversation State Machine**:
-   - Maintains conversation history, body hashes (to guarantee anti-repetition), auto-reply counters per merchant, and explicit opt-out status.
-   - Immediate **Intent Transition**: If the merchant responds with acceptance ("yes", "let's do it", "send it"), the bot switches immediately from pitch mode to action mode without re-qualifying.
-   - **Auto-Reply Protection**: Repeated canned phrases ("Thank you for contacting...") trigger a wait back-off and subsequent graceful exit to avoid loop spam.
+   - Maintains conversation history, body SHA-256 hashes (to guarantee anti-repetition), conversation-scoped auto-reply tracking, and explicit opt-out status.
+   - **Immediate Terminal Opt-Out**: Verified before classification or LLM execution; stops all further messaging immediately upon opt-out signals.
+   - **Intent Transition**: On merchant acceptance ("yes", "let's do it", "send it"), switches immediately to `ACTION` mode without re-qualifying.
+   - **Trigger Preservation on Replies**: Re-attaches original trigger facts (e.g. specific percentage drop, research citation, milestone) so user questions are answered with exact context.
 
-3. **Deterministic Multi-Provider LLM & Resilient Grounded Generation**:
-   - The engine supports Gemini, OpenAI, Groq, and local testing providers configured via environment variables.
-   - If an LLM call fails or times out, the engine executes a deterministic contextual composition based directly on the projected facts, ensuring responses always remain grounded, non-hallucinated, and comfortably below the 30s deadline.
+3. **Multi-Tier Grounding & Fact Validation**:
+   - `FactRegistry` extracts allowable numbers, currencies, percentages, dates, and named entities from the projected context.
+   - `OutputValidator` inspects all outputs before return. Any ungrounded claims or hallucinated figures are automatically replaced with a grounded contextual fallback.
+
+4. **Non-Blocking Async Execution**:
+   - All external LLM requests use `httpx.AsyncClient` with bounded timeouts (10s), ensuring the FastAPI event loop remains responsive under concurrent requests.
+   - `/v1/tick` prioritizes candidate triggers to top actionable items per tick to prevent latency budget exhaustion.
 
 ## 3. Endpoints Implemented
 
 - `GET /v1/healthz`: Uptime monitoring and dynamic counts across all 4 context scopes (`category`, `merchant`, `customer`, `trigger`).
-- `GET /v1/metadata`: Bot identification, team details, model selection, and version metadata.
-- `POST /v1/context`: Strict versioning: same version is idempotent no-op; higher version atomically replaces prior state; lower version returns `409 Conflict` (`stale_version`).
-- `POST /v1/tick`: Evaluates available triggers against suppression keys and consent, produces up to 20 ranked, grounded proactive WhatsApp actions with template metadata.
-- `POST /v1/reply`: Handles multi-turn simulation, distinguishing auto-replies, opt-outs, off-topic inquiries, and commitment-to-action transitions.
-- `POST /v1/teardown`: Cleanly wipes in-memory caches for test harness replay isolation.
+- `GET /v1/metadata`: Bot identification, team details, model selection, and configurable contact metadata.
+- `POST /v1/context`: Strict versioning: same version is idempotent no-op (200 OK); higher version atomically replaces prior state; lower version returns `409 Conflict` (`stale_version`).
+- `POST /v1/tick`: Evaluates candidate triggers against `now` timestamp, consent status, and suppression keys; produces high-confidence proactive WhatsApp actions with template metadata.
+- `POST /v1/reply`: Handles multi-turn simulation, distinguishing auto-replies, terminal opt-outs, off-topic inquiries, and commitment-to-action transitions.
+- `POST /v1/teardown`: Cleanly wipes in-memory stores for test harness replay isolation.
 
 ## 4. Running the Bot & Tests
 
-### Start the Service:
+### Install Dependencies:
 ```bash
-uvicorn vera.app:app --host 0.0.0.0 --port 8080
+pip install -r requirements.txt
 ```
-Or directly:
+
+### Start the Service:
 ```bash
 python bot.py
 ```
-
-### Run Unit & Behavioral Tests:
+Or via uvicorn directly:
 ```bash
-python -m pytest tests/test_service.py -v
+uvicorn vera.app:app --host 0.0.0.0 --port 8080
+```
+
+### Run Unit & Behavioral Test Suite (16 tests):
+```bash
+pytest tests/ -v
 ```
 
 ### Run the Official Judge Simulator:

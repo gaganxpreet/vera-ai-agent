@@ -344,3 +344,109 @@ def test_last_trigger_id_preserved_on_reply():
     conv_after = conversation_store.get_or_create(conv_id, merchant_id='m_001', customer_id=None)
     assert conv_after.last_trigger_id == 'trg_001_perf_dip',         'last_trigger_id was wiped during reply - trigger context lost'
 
+def test_cross_conversation_auto_reply_isolation():
+    """Auto-reply in Conv A should not cause Conv B for the same merchant to immediately terminate."""
+    auto_msg = "Thank you for reaching out to us! Our team will respond shortly."
+    
+    # Conv A - Turn 1 -> WAIT
+    r_a1 = client.post("/v1/reply", json={
+        "conversation_id": "conv_iso_A",
+        "merchant_id": "m_iso_merchant",
+        "message": auto_msg,
+        "turn_number": 2
+    })
+    assert r_a1.status_code == 200
+    assert r_a1.json()["action"] == "wait"
+
+    # Conv B - Turn 1 -> should ALSO be WAIT (not prematurely terminated because of A)
+    r_b1 = client.post("/v1/reply", json={
+        "conversation_id": "conv_iso_B",
+        "merchant_id": "m_iso_merchant",
+        "message": auto_msg,
+        "turn_number": 2
+    })
+    assert r_b1.status_code == 200
+    assert r_b1.json()["action"] == "wait"
+
+
+def test_e2e_reply_uses_preserved_perf_metric():
+    """End-to-end: query on a perf_dip conversation returns the exact percentage drop from trigger."""
+    # Push context for merchant and perf trigger
+    client.post("/v1/context", json={
+        "scope": "merchant", "context_id": "m_perf_query", "version": 1,
+        "payload": {
+            "merchant_id": "m_perf_query",
+            "category_slug": "restaurants",
+            "identity": {"name": "Biryani Express", "owner_first_name": "Tariq"}
+        }
+    })
+    client.post("/v1/context", json={
+        "scope": "trigger", "context_id": "trg_perf_drop_35", "version": 1,
+        "payload": {
+            "id": "trg_perf_drop_35",
+            "scope": "merchant",
+            "kind": "perf_dip",
+            "merchant_id": "m_perf_query",
+            "payload": {"metric": "views", "delta_pct": -0.35, "window": "7d"},
+            "urgency": 4
+        }
+    })
+
+    # Trigger proactive tick
+    t_resp = client.post("/v1/tick", json={
+        "now": "2026-04-26T10:00:00Z",
+        "available_triggers": ["trg_perf_drop_35"]
+    })
+    assert t_resp.status_code == 200
+    actions = t_resp.json()["actions"]
+    assert len(actions) == 1
+    conv_id = actions[0]["conversation_id"]
+
+    # Merchant asks clarifying question
+    r_resp = client.post("/v1/reply", json={
+        "conversation_id": conv_id,
+        "merchant_id": "m_perf_query",
+        "message": "What metric dropped and by how much?",
+        "turn_number": 2
+    })
+    assert r_resp.status_code == 200
+    reply_body = r_resp.json()["body"]
+    # Body must ground on the original trigger's 35% drop
+    assert "35%" in reply_body
+    assert "views" in reply_body.lower() or "biryani express" in reply_body.lower()
+
+
+def test_production_composer_rejects_hallucinated_facts():
+    """Output validator repairs/replaces hallucinated currency and % in production composition."""
+    from vera.validator import output_validator
+    
+    projection = {
+        "merchant": {"name": "Dental Care Plus", "locality": "Indiranagar", "owner_first_name": "Rohan"},
+        "category": {"slug": "dentists", "voice": {"tone": "clinical"}},
+        "trigger": {"kind": "perf_dip", "payload": {"metric": "calls", "delta_pct": -0.25}}
+    }
+    
+    # Raw output hallucinating non-existent 85% and ₹50000
+    hallucinated_raw = {
+        "body": "Hi Rohan, revenue crashed by 85% and you lost ₹50,000 this week. Want a fix?",
+        "cta": "binary_yes_no",
+        "send_as": "vera",
+        "template_name": "vera_perf_dip_v1",
+        "template_params": ["Rohan", "calls", "85%"],
+        "rationale": "Hallucinated pitch"
+    }
+
+    validated = output_validator.validate_and_repair_proactive(
+        hallucinated_raw,
+        expected_send_as="vera",
+        expected_cta="binary_yes_no",
+        template_name="vera_perf_dip_v1",
+        previous_body_hashes=[],
+        projection=projection
+    )
+
+    # Grounded fallback must replace hallucinated numbers with verified facts
+    assert "₹50,000" not in validated["body"]
+    assert "85%" not in validated["body"]
+    assert "25%" in validated["body"]
+

@@ -21,11 +21,11 @@ class Settings(BaseModel):
     groq_model: str = Field(default_factory=lambda: os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"))
 
     # Bot Metadata
-    team_name: str = Field(default_factory=lambda: os.getenv("TEAM_NAME", "Team Vera Growth Engine"))
-    team_members: list[str] = Field(default_factory=lambda: ["AI Engineer & Lead Architect"])
+    team_name: str = Field(default_factory=lambda: os.getenv("TEAM_NAME", "Team Vera AI Engine"))
+    team_members: list[str] = Field(default_factory=lambda: [os.getenv("TEAM_MEMBER", "Gaganpreet Singh")])
     model_name: str = Field(default_factory=lambda: os.getenv("BOT_MODEL_NAME", "gemini-1.5-flash"))
-    approach: str = Field(default_factory=lambda: os.getenv("BOT_APPROACH", "Deterministic context-projected strategy router with structured LLM composition & rule validator"))
-    contact_email: str = Field(default_factory=lambda: os.getenv("CONTACT_EMAIL", "vera-lead@magicpin.in"))
+    approach: str = Field(default_factory=lambda: os.getenv("BOT_APPROACH", "Deterministic context-projected strategy router with async structured LLM composition, FactRegistry validation & bounded state machine"))
+    contact_email: str = Field(default_factory=lambda: os.getenv("CONTACT_EMAIL", "gaganxpreet@gmail.com"))
     version: str = "1.0.0"
 
 settings = Settings()

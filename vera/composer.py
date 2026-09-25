@@ -126,7 +126,7 @@ class MessageComposer:
         if inbound_intent == "AUTO_REPLY":
             conv_state.auto_reply_count += 1
             m_count = conversation_store.record_auto_reply(conv_state.merchant_id)
-            if conv_state.auto_reply_count >= 2 or m_count >= 2:
+            if conv_state.auto_reply_count >= 2 or m_count >= 3:
                 conv_state.status = "ENDED"
                 conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message, action="end")
                 return ReplyResponse(

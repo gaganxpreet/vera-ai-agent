@@ -41,38 +41,82 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
                 "rationale": "Politely declined off-topic GST inquiry while maintaining continuity and refocusing on active campaign."
             }
         else:
-            return {
-                "action": "send",
-                "body": f"Thanks for the update, {owner_name}! I'm tracking this for {merchant.get('name')} and will share concrete insights as soon as we have fresh numbers.",
-                "cta": "open_ended",
-                "rationale": "Acknowledged incoming query with grounded merchant context."
-            }
+            # Handle questions using preserved original trigger context
+            if "perf" in kind or t_payload.get("delta_pct") is not None:
+                metric = t_payload.get("metric", "traffic")
+                delta_val = t_payload.get("delta_pct")
+                if delta_val is None:
+                    d7 = merchant.get("performance", {}).get("delta_7d", {})
+                    delta_val = d7.get(f"{metric}_pct") or d7.get("calls_pct") or d7.get("views_pct")
+                delta_phrase = f"{int(round(abs(delta_val)*100))}%" if delta_val is not None else "recent"
+                window = t_payload.get("window", "7d")
+                return {
+                    "action": "send",
+                    "body": f"Looking at your profile analytics for {merchant.get('name')}, {metric} dropped by {delta_phrase} over the past {window}. Shall I share the recovery plan we can activate today?",
+                    "cta": "binary_yes_no",
+                    "rationale": f"Preserved original trigger context to provide exact performance metrics on query."
+                }
+            elif kind == "research_digest":
+                item = category.get("target_digest_item", {})
+                source = item.get("source", "Peer Journal")
+                title = item.get("title", "the latest clinical findings")
+                return {
+                    "action": "send",
+                    "body": f"The study in {source} covers {title}. Would you like me to share the 2-minute summary and draft an education note for your patients?",
+                    "cta": "binary_yes_no",
+                    "rationale": "Preserved research digest trigger context to answer query with exact study citation."
+                }
+            elif kind == "renewal_due":
+                plan = t_payload.get("plan") or merchant.get("subscription", {}).get("plan", "Pro")
+                days = t_payload.get("days_remaining") or merchant.get("subscription", {}).get("days_remaining", "upcoming")
+                return {
+                    "action": "send",
+                    "body": f"Your {merchant.get('name')} {plan} subscription has {days} days remaining. Renewing keeps your verified badge and priority ranking active. Want me to send the renewal link?",
+                    "cta": "binary_yes_no",
+                    "rationale": "Preserved renewal trigger context with exact plan and days remaining."
+                }
+            else:
+                return {
+                    "action": "send",
+                    "body": f"Thanks for the question, {owner_name}! I'm tracking this for {merchant.get('name')} and can help you optimize this right away. Would you like me to send the preview?",
+                    "cta": "binary_yes_no",
+                    "rationale": "Acknowledged incoming query with grounded merchant context."
+                }
 
     # Proactive composition by trigger kind
     if kind == "research_digest":
         item = category.get("target_digest_item", {})
-        title = item.get("title", "new clinical research")
-        source = item.get("source", "Peer Journal")
+        title = item.get("title")
+        source = item.get("source")
         n_trial = f" (n={item.get('trial_n')})" if item.get("trial_n") else ""
+        
+        if title and source:
+            body_text = f"Dr. {owner_name}, fresh findings in {source}: {title}{n_trial}. Relevant to your patient roster. Would you like me to share the 2-minute summary and draft an education note for your patients? — {source}"
+            t_params = [f"Dr. {owner_name}", title, source]
+        else:
+            body_text = f"Dr. {owner_name}, clinical digest update available for your specialty. Would you like a brief summary of the latest peer findings relevant to {merchant.get('name')}?"
+            t_params = [f"Dr. {owner_name}", "Clinical Research Digest"]
+
         return {
-            "body": f"Dr. {owner_name}, fresh findings in {source}: {title}{n_trial}. Relevant to your high-risk patient roster. Would you like me to share the 2-minute summary and draft a patient-education WhatsApp message for you? — {source}",
+            "body": body_text,
             "cta": "open_ended",
             "template_name": "vera_research_digest_v1",
-            "template_params": [f"Dr. {owner_name}", title, source],
+            "template_params": t_params,
             "send_as": "vera",
             "rationale": "Grounds on verified clinical trial numbers and source citation; targets merchant specific cohort with low-friction offer."
         }
 
     elif kind == "regulation_change":
-        deadline = t_payload.get("deadline_iso", "the upcoming regulatory deadline")
+        deadline = t_payload.get("deadline_iso")
         item = category.get("target_digest_item", {})
         title = item.get("title", "regulatory guidelines update")
         source = item.get("source", "Official Council Circular")
+        deadline_phrase = f" with effective deadline {deadline}" if deadline else ""
         return {
-            "body": f"Dr. {owner_name}, compliance update: {source} published {title} with effective deadline {deadline}. Want me to send the 3-point checklist to ensure your clinic is fully compliant?",
+            "body": f"Dr. {owner_name}, compliance update: {source} published {title}{deadline_phrase}. Want me to send the 3-point checklist to ensure {merchant.get('name')} is fully compliant?",
             "cta": "binary_yes_no",
             "template_name": "vera_compliance_alert_v1",
-            "template_params": [f"Dr. {owner_name}", str(deadline), source],
+            "template_params": [f"Dr. {owner_name}", str(deadline or "upcoming"), source],
             "send_as": "vera",
             "rationale": "Provides exact compliance deadline and regulatory citation with binary checklist offer."
         }
@@ -82,26 +126,35 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         m_name = merchant.get("name", "our clinic")
         cat_slug = category.get("slug") or merchant.get("category_slug", "dentists")
         slots = t_payload.get("available_slots", [])
-        slot_str = f"{slots[0].get('label')} or {slots[1].get('label')}" if len(slots) >= 2 else "this week"
+        if len(slots) >= 2:
+            slot_phrase = f" We have slots open: {slots[0].get('label')} or {slots[1].get('label')}."
+            slot_param = f"{slots[0].get('label')} or {slots[1].get('label')}"
+        elif len(slots) == 1:
+            slot_phrase = f" Open slot available: {slots[0].get('label')}."
+            slot_param = slots[0].get("label")
+        else:
+            slot_phrase = ""
+            slot_param = "recall"
+
         active_offers = merchant.get("active_offers", [])
         offer_str = f" {active_offers[0].get('title')}." if active_offers else ""
 
         if cat_slug == "gyms":
-            body_text = f"Hi {cust_name}, {m_name} team here! It's time for your periodic fitness progress review and workout session. Open slots: {slot_str}.{offer_str} Shall we reserve one for you?"
+            body_text = f"Hi {cust_name}, {m_name} team here! It's time for your periodic fitness progress review and workout session.{slot_phrase}{offer_str} Shall we reserve your spot?"
         elif cat_slug == "salons":
-            body_text = f"Hi {cust_name}, {m_name} here ✨ Time for your next styling & care session. We have open slots: {slot_str}.{offer_str} Would you like us to book a time?"
+            body_text = f"Hi {cust_name}, {m_name} here ✨ Time for your next styling & care session.{slot_phrase}{offer_str} Would you like us to book a time?"
         elif cat_slug == "pharmacies":
-            body_text = f"Hi {cust_name}, {m_name} here. Gentle reminder for your routine health and medication refill. Slots open: {slot_str}.{offer_str} Would you like us to prepare it for pickup?"
+            body_text = f"Hi {cust_name}, {m_name} here. Gentle reminder for your routine health and medication refill.{slot_phrase}{offer_str} Would you like us to prepare it for pickup?"
         elif cat_slug == "restaurants":
-            body_text = f"Hi {cust_name}, {m_name} here! We'd love to welcome you back for your next dining visit. Open tables: {slot_str}.{offer_str} Would you like to reserve a table?"
+            body_text = f"Hi {cust_name}, {m_name} here! We'd love to welcome you back for your next dining visit.{slot_phrase}{offer_str} Would you like to reserve a table?"
         else: # dentists
-            body_text = f"Hi {cust_name}, {m_name} here 🦷 It's time for your routine 6-month cleaning recall. We have slots open: {slot_str}.{offer_str} Would you like to confirm one of these times?"
+            body_text = f"Hi {cust_name}, {m_name} here 🦷 It's time for your routine 6-month cleaning recall.{slot_phrase}{offer_str} Would you like to confirm a visit?"
 
         return {
             "body": body_text,
             "cta": "binary_yes_no",
             "template_name": "merchant_recall_reminder_v1",
-            "template_params": [cust_name, m_name, slot_str],
+            "template_params": [cust_name, m_name, slot_param],
             "send_as": "merchant_on_behalf",
             "rationale": f"Personalized customer recall tailored to {cat_slug} category voice and real availability."
         }
@@ -113,7 +166,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             d7 = merchant.get("performance", {}).get("delta_7d", {})
             delta_val = d7.get(f"{metric}_pct") or d7.get("calls_pct") or d7.get("views_pct")
 
-        delta_phrase = f"dipped {int(abs(delta_val)*100)}%" if delta_val is not None else "dipped"
+        delta_phrase = f"dipped {int(round(abs(delta_val)*100))}%" if delta_val is not None else "dipped"
         window = t_payload.get("window")
         window_phrase = f" over the past {window}" if window else ""
         return {
@@ -142,30 +195,22 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
 
     elif kind == "festival_upcoming":
         fest = t_payload.get("festival")
-        if not fest:
-            # Check merchant signals or seasonal beats
-            signals = merchant.get("signals", [])
-            if any("diwali" in s.lower() for s in signals):
-                fest = "Diwali"
-            elif any("ipl" in s.lower() for s in signals):
-                fest = "IPL Match Season"
-            else:
-                cat_slug = category.get("slug") or merchant.get("category_slug", "")
-                if cat_slug == "gyms":
-                    fest = "the fitness resolution window"
-                elif cat_slug == "salons":
-                    fest = "the upcoming festive wedding season"
-                else:
-                    fest = "the festive season"
-
         days = t_payload.get("days_until")
-        days_phrase = f"in {days} days" if days is not None else "soon"
+        days_phrase = f" in {days} days" if days is not None else " soon"
         loc = merchant.get("locality") or "your area"
+
+        if fest:
+            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Demand across {loc} usually surges for festive appointments. I've drafted a festive promotion ready to publish to Google & WhatsApp. Want me to send the preview?"
+            fest_param = fest
+        else:
+            body_text = f"Hi {owner_name}, peak seasonal customer demand is approaching for {loc}. I've prepared a customized promotion draft for {merchant.get('name')} to publish to Google & WhatsApp. Want me to send the preview?"
+            fest_param = "Seasonal Demand"
+
         return {
-            "body": f"Hi {owner_name}, {fest} is coming up {days_phrase}! Demand across {loc} usually surges for festive appointments. I've drafted a festive promotion ready to publish to Google & WhatsApp. Want me to send the preview?",
+            "body": body_text,
             "cta": "binary_yes_no",
             "template_name": "vera_festival_campaign_v1",
-            "template_params": [owner_name, fest, str(days or "soon")],
+            "template_params": [owner_name, fest_param, str(days or "soon")],
             "send_as": "vera",
             "rationale": "Leverages upcoming festive timeline with pre-built merchant campaign preview."
         }
@@ -181,7 +226,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             timeline_phrase = "Following your bridal trial,"
             t_params = [cust_name, m_name]
         return {
-            "body": f"Hi {cust_name} 💍 {m_name} here! {timeline_phrase} now is the ideal window to schedule your 30-day skin-prep program. Would you like us to reserve your preferred weekend slot for session 1?",
+            "body": f"Hi {cust_name} 💍 {m_name} here! {timeline_phrase} now is the ideal window to schedule your skin-prep program. Would you like us to reserve your preferred slot for session 1?",
             "cta": "binary_yes_no",
             "template_name": "merchant_bridal_followup_v1",
             "template_params": t_params,
@@ -240,13 +285,19 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             count_phrase = f"crossed {count} verified customer reviews"
         else:
             leads = merchant.get("performance", {}).get("leads")
-            count_phrase = f"crossed {leads} customer leads" if leads else "reached a verified performance milestone"
+            views = merchant.get("performance", {}).get("views")
+            if leads:
+                count_phrase = f"crossed {leads} customer leads"
+            elif views:
+                count_phrase = f"reached {views} profile views this month"
+            else:
+                count_phrase = "reached a verified performance milestone"
 
         return {
             "body": f"Congratulations {owner_name}! {merchant.get('name')} just {count_phrase} on your profile. I've drafted a celebratory update to share with your customers. Want me to send the draft?",
             "cta": "binary_yes_no",
             "template_name": "vera_milestone_v1",
-            "template_params": [owner_name, str(count or "reviews")],
+            "template_params": [owner_name, str(count or "milestone")],
             "send_as": "vera",
             "rationale": "Celebrates exact milestone achievement with grounded verifiable figures."
         }
@@ -258,7 +309,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
             d7 = merchant.get("performance", {}).get("delta_7d", {})
             delta_val = d7.get(f"{metric}_pct") or d7.get("views_pct") or d7.get("calls_pct")
 
-        delta_phrase = f"+{int(abs(delta_val)*100)}%" if delta_val is not None else "strongly"
+        delta_phrase = f"+{int(round(abs(delta_val)*100))}%" if delta_val is not None else "strongly"
         views_count = merchant.get("performance", {}).get(metric)
         views_phrase = f" ({views_count} total)" if views_count else ""
         return {
@@ -287,8 +338,16 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         cust_name = customer.get("name", "there") if customer else "there"
         active_offers = merchant.get("active_offers", [])
         offer_str = f" Enjoy our {active_offers[0].get('title')}." if active_offers else ""
+        molecules = t_payload.get("molecule_list", [])
+        med_str = f" for your routine medications ({', '.join(molecules[:2])})" if molecules else ""
+        
+        if "refill" in kind or "chronic" in kind:
+            body_text = f"Hi {cust_name}, gentle reminder from {merchant.get('name')}{med_str}.{offer_str} Would you like us to prepare your refill for pickup or delivery?"
+        else:
+            body_text = f"Hi {cust_name}, we miss seeing you at {merchant.get('name')}!{offer_str} Would you like us to help schedule your next visit?"
+
         return {
-            "body": f"Hi {cust_name}, we miss seeing you at {merchant.get('name')}!{offer_str} We have preferred slots open for you this week. Would you like us to book a time?",
+            "body": body_text,
             "cta": "binary_yes_no",
             "template_name": "merchant_winback_v1",
             "template_params": [cust_name, merchant.get('name', 'our store')],
