@@ -269,3 +269,78 @@ def test_fact_grounding_validator():
     assert valid is False
     assert len(issues) >= 1
 
+def test_consent_revoked_trigger_blocked():
+    """Trigger whose customer has revoked consent must produce zero actions."""
+    client.post('/v1/teardown')
+    client.post('/v1/context', json={
+        'scope': 'customer', 'context_id': 'c_revoked', 'version': 1,
+        'payload': {'name': 'Rahul', 'consent': {'status': 'revoked', 'scope': ['whatsapp']}}
+    })
+    client.post('/v1/context', json={
+        'scope': 'merchant', 'context_id': 'm_rev_test', 'version': 1,
+        'payload': {'name': 'Test Merchant', 'category_slug': 'gyms'}
+    })
+    client.post('/v1/context', json={
+        'scope': 'trigger', 'context_id': 'trg_revoked_consent', 'version': 1,
+        'payload': {
+            'kind': 'perf_dip',
+            'merchant_id': 'm_rev_test',
+            'customer_id': 'c_revoked',
+            'payload': {'delta_pct': -0.30}
+        }
+    })
+    tick_resp = client.post('/v1/tick', json={
+        'now': '2026-09-26T10:00:00Z',
+        'available_triggers': ['trg_revoked_consent']
+    })
+    assert tick_resp.status_code == 200
+    assert len(tick_resp.json()['actions']) == 0, \
+        'Trigger linked to revoked-consent customer must be blocked by the router'
+
+
+def test_stale_context_version_returns_409():
+    """Pushing a context with version <= current must return 409 Conflict."""
+    r1 = client.post('/v1/context', json={
+        'scope': 'merchant', 'context_id': 'm_versioned', 'version': 5,
+        'payload': {'name': 'Version Test Merchant', 'category_slug': 'restaurants'}
+    })
+    assert r1.status_code == 200
+
+    r2 = client.post('/v1/context', json={
+        'scope': 'merchant', 'context_id': 'm_versioned', 'version': 4,
+        'payload': {'name': 'Version Test Merchant stale'}
+    })
+    assert r2.status_code == 409
+    body = r2.json()
+    assert body['accepted'] is False
+    assert body['reason'] == 'stale_version'
+
+    r3 = client.post('/v1/context', json={
+        'scope': 'merchant', 'context_id': 'm_versioned', 'version': 6,
+        'payload': {'name': 'Version Test Merchant fresh', 'category_slug': 'restaurants'}
+    })
+    assert r3.status_code == 200
+    assert r3.json()['accepted'] is True
+
+
+def test_last_trigger_id_preserved_on_reply():
+    """After a proactive message, replies must preserve the original trigger context."""
+    from vera.conversation_state import conversation_store
+
+    conv_id = 'conv_trigger_preserve'
+    conv = conversation_store.get_or_create(conv_id, merchant_id='m_001', customer_id=None)
+    conv.last_trigger_id = 'trg_001_perf_dip'
+    conv.status = 'PROACTIVE_SENT'
+
+    resp = client.post('/v1/reply', json={
+        'conversation_id': conv_id,
+        'merchant_id': 'm_001',
+        'message': 'What exactly dropped? Tell me more.',
+        'turn_number': 2
+    })
+    assert resp.status_code == 200
+    assert resp.json()['action'] in ('send', 'wait', 'end')
+
+    conv_after = conversation_store.get_or_create(conv_id, merchant_id='m_001', customer_id=None)
+    assert conv_after.last_trigger_id == 'trg_001_perf_dip',         'last_trigger_id was wiped during reply - trigger context lost'
+
