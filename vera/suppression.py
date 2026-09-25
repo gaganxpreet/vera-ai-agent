@@ -8,6 +8,20 @@ class SuppressionManager:
         # Explicitly opted out merchants / customers
         self._opted_out_merchants: Set[str] = set()
         self._opted_out_customers: Set[str] = set()
+        self._simulated_now: Optional[float] = None
+
+    def set_simulated_time(self, iso_timestamp: Optional[str]):
+        """Synchronizes suppression expiration clock with challenge simulation time."""
+        if iso_timestamp:
+            try:
+                from datetime import datetime
+                clean = iso_timestamp.replace("Z", "+00:00")
+                self._simulated_now = datetime.fromisoformat(clean).timestamp()
+            except Exception:
+                pass
+
+    def _now(self) -> float:
+        return self._simulated_now if self._simulated_now is not None else time.time()
 
     def is_suppressed(self, suppression_key: str, merchant_id: Optional[str] = None, customer_id: Optional[str] = None) -> bool:
         if merchant_id and merchant_id in self._opted_out_merchants:
@@ -17,7 +31,7 @@ class SuppressionManager:
         if not suppression_key:
             return False
             
-        now = time.time()
+        now = self._now()
         if suppression_key in self._suppressed_keys:
             expiry = self._suppressed_keys[suppression_key]
             if expiry == 0 or expiry > now:
@@ -29,7 +43,7 @@ class SuppressionManager:
     def mark_suppressed(self, suppression_key: str, ttl_seconds: float = 86400 * 7):
         if not suppression_key:
             return
-        now = time.time()
+        now = self._now()
         self._suppressed_keys[suppression_key] = now + ttl_seconds if ttl_seconds > 0 else 0
 
     def opt_out_merchant(self, merchant_id: str):

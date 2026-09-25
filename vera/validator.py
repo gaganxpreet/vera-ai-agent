@@ -22,15 +22,12 @@ class OutputValidator:
         """
         output = dict(raw_output)
         
-        # 1. Enforce send_as
-        if output.get("send_as") not in VALID_SEND_AS:
-            output["send_as"] = expected_send_as
+        # 1. Authoritative strategy layer enforcement for send_as and cta
+        output["send_as"] = expected_send_as
+        output["cta"] = expected_cta
+        output["template_name"] = template_name
 
-        # 2. Enforce CTA
-        if output.get("cta") not in VALID_CTAS:
-            output["cta"] = expected_cta
-
-        # 3. Ensure body is non-empty via projection-grounded fallback (no generic string fabrication)
+        # 2. Ensure body is non-empty via projection-grounded fallback (no generic string fabrication)
         body = (output.get("body") or "").strip()
         if not body:
             if projection:
@@ -40,7 +37,7 @@ class OutputValidator:
             if not body:
                 return None  # Cannot construct a grounded body -> suppress outreach
 
-        # 4. Fact Grounding Verification against input projection
+        # 3. Fact Grounding Verification against input projection
         if projection:
             facts = FactRegistry.extract_allowed_facts(projection)
             is_grounded, issues = FactRegistry.verify_grounding(body, facts)
@@ -63,18 +60,16 @@ class OutputValidator:
 
         output["body"] = body
 
-        # 5. Anti-repetition check: if body hash already sent in this thread, discard to avoid duplicate messaging
+        # 4. Anti-repetition check: if body hash already sent in this thread, discard to avoid duplicate messaging
         body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
         if body_hash in previous_body_hashes:
             return None # Suppress duplicate send
 
-        # 6. Template metadata
-        if not output.get("template_name"):
-            output["template_name"] = template_name
-        params = output.get("template_params") or ["Merchant", "Update"]
+        # 5. Template parameters (clean list, no fabricated placeholders)
+        params = output.get("template_params") or []
         output["template_params"] = [str(p) if p is not None else "" for p in params]
 
-        # 7. Rationale
+        # 6. Rationale
         if not output.get("rationale"):
             output["rationale"] = "Grounded proactive message anchored on current trigger and merchant state."
 

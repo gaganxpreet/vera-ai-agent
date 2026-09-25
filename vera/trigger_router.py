@@ -12,6 +12,7 @@ class TriggerRouter:
         """
         now_dt: Optional[datetime] = None
         if now:
+            suppression_manager.set_simulated_time(now)
             try:
                 clean_now = now.replace("Z", "+00:00")
                 now_dt = datetime.fromisoformat(clean_now)

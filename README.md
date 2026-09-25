@@ -43,8 +43,8 @@ This solution implements a deterministic, stateful, context-grounded message com
    - **Trigger Preservation on Replies**: Re-attaches original trigger facts (e.g. specific percentage drop, research citation, milestone) so user questions are answered with exact context.
 
 3. **Multi-Tier Grounding & Fact Validation**:
-   - `FactRegistry` extracts allowable numbers, currencies, percentages, dates, and named entities from the projected context.
-   - `OutputValidator` inspects all outputs before return. Any ungrounded claims or hallucinated figures are automatically replaced with a grounded contextual fallback.
+   - `FactRegistry` extracts type-specific evidence sets: allowed prices (`₹`), distances (`km`), sample sizes (`n=`), percentages (`%`), dates, offer titles, and regulatory sources from the projected context.
+   - `OutputValidator` inspects all proactive and reply outputs before dispatch. Any ungrounded claims or hallucinated figures are replaced with grounded contextual fallbacks that are themselves strictly revalidated against the `FactRegistry` before send; ungroundable messages are safely suppressed.
 
 4. **Non-Blocking Async Execution**:
    - All external LLM requests use `httpx.AsyncClient` with bounded timeouts (10s), ensuring the FastAPI event loop remains responsive under concurrent requests.
@@ -75,7 +75,7 @@ Or via uvicorn directly:
 uvicorn vera.app:app --host 0.0.0.0 --port 8080
 ```
 
-### Run Unit & Behavioral Test Suite (16 tests):
+### Run Unit & Behavioral Test Suite (20 tests):
 ```bash
 pytest tests/ -v
 ```

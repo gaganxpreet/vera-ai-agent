@@ -72,15 +72,22 @@ def project_context_for_trigger(
             "languages": ident.get("languages") or merchant.get("languages", ["en"])
         }
 
-        # Include performance/subscription strictly when relevant
+        # Include performance/subscription strictly when relevant (no synthetic defaults)
         if "perf" in kind:
             perf = merchant.get("performance", {})
-            metric = t_payload.get("metric", "views")
-            projected_merchant["performance"] = {
-                "window_days": perf.get("window_days", 30),
-                metric: perf.get(metric),
-                "delta_7d": perf.get("delta_7d", {})
-            }
+            metric = t_payload.get("metric")
+            perf_proj = {}
+            if "window_days" in perf:
+                perf_proj["window_days"] = perf["window_days"]
+            if metric and metric in perf:
+                perf_proj[metric] = perf[metric]
+            elif not metric:
+                for m_key in ["views", "leads", "calls", "traffic"]:
+                    if m_key in perf:
+                        perf_proj[m_key] = perf[m_key]
+            if "delta_7d" in perf:
+                perf_proj["delta_7d"] = perf["delta_7d"]
+            projected_merchant["performance"] = perf_proj
         elif kind == "renewal_due":
             projected_merchant["subscription"] = merchant.get("subscription", {})
         elif "milestone" in kind:
