@@ -541,5 +541,33 @@ def test_grounding_rejects_unsupported_source_and_action_claims():
     assert "I've booked" not in validated["body"]
 
 
+def test_empty_output_falls_back_without_generic_fabrication():
+    """Empty LLM output is grounded against projection facts, not generic hardcoded strings."""
+    from vera.validator import output_validator
+
+    projection = {
+        "merchant": {"name": "Sunrise Pharmacy", "locality": "Gomti Nagar", "owner_first_name": "Vikas"},
+        "trigger": {"kind": "perf_dip", "payload": {"metric": "views", "delta_pct": -0.30}}
+    }
+
+    # Empty raw LLM output
+    empty_raw = {"body": "", "cta": "binary_yes_no"}
+
+    validated = output_validator.validate_and_repair_proactive(
+        empty_raw,
+        expected_send_as="vera",
+        expected_cta="binary_yes_no",
+        template_name="vera_perf_dip_v1",
+        previous_body_hashes=[],
+        projection=projection
+    )
+
+    # Must be grounded on the 30% views drop, not generic profile check-in string
+    assert validated is not None
+    assert "30%" in validated["body"]
+    assert "views" in validated["body"]
+
+
+
 
 

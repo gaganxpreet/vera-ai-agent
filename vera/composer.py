@@ -170,7 +170,13 @@ class MessageComposer:
         recent_turns = [{"role": t.role, "message": t.message} for t in conv_state.turns[-4:]]
 
         prompts = build_reply_prompt(inbound_message, inbound_intent, conv_state.mode, projection, recent_turns)
-        raw_res = await llm_client.areply_structured(projection, inbound_message, prompts["system"], prompts["user"])
+        raw_res = await llm_client.areply_structured(
+            projection,
+            inbound_message,
+            prompts["system"],
+            prompts["user"],
+            intent=inbound_intent
+        )
 
         # Deterministic validation
         validated = output_validator.validate_and_repair_reply(

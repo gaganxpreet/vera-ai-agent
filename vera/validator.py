@@ -30,22 +30,38 @@ class OutputValidator:
         if output.get("cta") not in VALID_CTAS:
             output["cta"] = expected_cta
 
-        # 3. Ensure body is non-empty
+        # 3. Ensure body is non-empty via projection-grounded fallback (no generic string fabrication)
         body = (output.get("body") or "").strip()
         if not body:
-            body = "Hi there, checking in from Vera with an update on your profile performance."
-        output["body"] = body
+            if projection:
+                from vera.llm_client import _generate_grounded_fallback
+                fallback = _generate_grounded_fallback(projection)
+                body = (fallback.get("body") or "").strip()
+            if not body:
+                return None  # Cannot construct a grounded body -> suppress outreach
 
         # 4. Fact Grounding Verification against input projection
         if projection:
             facts = FactRegistry.extract_allowed_facts(projection)
             is_grounded, issues = FactRegistry.verify_grounding(body, facts)
             if not is_grounded:
-                # If hallucinated numbers/currencies detected, repair with grounded fallback
+                # LLM output hallucinated facts -> generate grounded deterministic fallback
                 from vera.llm_client import _generate_grounded_fallback
                 fallback = _generate_grounded_fallback(projection)
-                output["body"] = fallback["body"]
-                body = fallback["body"]
+                fallback_body = (fallback.get("body") or "").strip()
+                # Crucial: Revalidate the fallback to ensure it satisfies grounding
+                f_grounded, f_issues = FactRegistry.verify_grounding(fallback_body, facts)
+                if f_grounded:
+                    body = fallback_body
+                    output["body"] = body
+                    output["template_name"] = fallback.get("template_name", template_name)
+                    output["template_params"] = fallback.get("template_params", [])
+                    output["cta"] = fallback.get("cta", expected_cta)
+                    output["send_as"] = fallback.get("send_as", expected_send_as)
+                else:
+                    return None  # If fallback also fails grounding, suppress rather than sending ungrounded text
+
+        output["body"] = body
 
         # 5. Anti-repetition check: if body hash already sent in this thread, discard to avoid duplicate messaging
         body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -72,7 +88,8 @@ class OutputValidator:
         inbound_message: str = ""
     ) -> Dict[str, Any]:
         """
-        Deterministically verifies and repairs LLM reply output, including fact grounding verification.
+        Deterministically verifies and repairs LLM reply output, including strict fact grounding verification
+        and revalidation of replacement fallbacks.
         """
         output = dict(raw_output)
         action = output.get("action", "send")
@@ -82,20 +99,36 @@ class OutputValidator:
 
         if action == "send":
             body = (output.get("body") or "").strip()
-            if not body:
-                body = "Understood! Proceeding with the discussed update."
 
             # Fact Grounding Verification against input projection
             if projection:
                 facts = FactRegistry.extract_allowed_facts(projection)
-                is_grounded, issues = FactRegistry.verify_grounding(body, facts)
-                if not is_grounded:
+                is_grounded, issues = FactRegistry.verify_grounding(body, facts) if body else (False, ["Empty body"])
+                if not is_grounded or not body:
                     from vera.llm_client import _generate_grounded_fallback
                     fallback = _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_message)
-                    body = fallback.get("body", body)
-                    output["action"] = fallback.get("action", "send")
-                    output["cta"] = fallback.get("cta", "binary_yes_no")
-                    output["rationale"] = f"Grounding repair applied: {fallback.get('rationale', '')}"
+                    fallback_body = fallback.get("body", "")
+                    # Revalidate the fallback before sending
+                    f_grounded, _ = FactRegistry.verify_grounding(fallback_body, facts) if fallback_body else (False, [])
+                    if f_grounded:
+                        body = fallback_body
+                        output["action"] = fallback.get("action", "send")
+                        output["cta"] = fallback.get("cta", "none")
+                        output["rationale"] = f"Grounding repair applied: {fallback.get('rationale', '')}"
+                    else:
+                        output["action"] = "wait"
+                        output["wait_seconds"] = 14400
+                        output["body"] = None
+                        output["cta"] = None
+                        output["rationale"] = "Reply could not be grounded in facts; safely transitioned to wait."
+                        return output
+            elif not body:
+                output["action"] = "wait"
+                output["wait_seconds"] = 14400
+                output["body"] = None
+                output["cta"] = None
+                output["rationale"] = "Empty reply body received; transitioned to wait state."
+                return output
 
             # Anti-repetition: if exact same reply body was already sent, switch to wait to avoid repetitive looping
             body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()

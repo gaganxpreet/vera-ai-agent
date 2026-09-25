@@ -5,7 +5,7 @@ from vera.config import settings
 
 logger = logging.getLogger("vera.llm")
 
-def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = False, inbound_msg: str = "") -> Dict[str, Any]:
+def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = False, inbound_msg: str = "", intent: str = "") -> Dict[str, Any]:
     """
     High-quality deterministic fallback composition when no LLM API key is configured.
     Derives message purely from projected context and trigger specifications without hallucination.
@@ -21,7 +21,7 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     
     if is_reply:
         inbound_lower = inbound_msg.lower()
-        if any(w in inbound_lower for w in ["yes", "go ahead", "let's do it", "send", "sure", "ok", "okay", "proceed"]):
+        if intent == "ACCEPTANCE" or any(w in inbound_lower for w in ["yes", "go ahead", "let's do it", "send", "sure", "ok", "okay", "proceed"]):
             extra_param = ""
             for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
                 if day in inbound_lower:
@@ -377,14 +377,16 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         }
 
     elif "ipl" in kind:
-        match_info = t_payload.get("match", "Tonight's match")
+        match_info = t_payload.get("match")
+        match_phrase = f"{match_info} is coming up!" if match_info else "IPL match day is coming up!"
+        param_val = match_info or "IPL Match"
         return {
-            "body": f"Hi {owner_name}, {match_info} is coming up! For {merchant.get('name')}, delivery demand typically surges during evening innings. Want me to set up a match-time combo offer on your profile to capture that traffic?",
+            "body": f"Hi {owner_name}, {match_phrase} For {merchant.get('name')}, want me to set up a match-time combo offer on your profile to capture evening delivery traffic?",
             "cta": "binary_yes_no",
             "template_name": "vera_ipl_v1",
-            "template_params": [owner_name, match_info],
+            "template_params": [owner_name, param_val],
             "send_as": "vera",
-            "rationale": "Match-day demand capitalization — asks permission before activating anything."
+            "rationale": "Match-day demand capitalization anchored strictly on provided context."
         }
 
     # ── Default fallback: use the strongest available grounded fact ──────────
@@ -573,66 +575,50 @@ class LLMClient:
 
         return None
 
+    def _parse_json(self, raw_text: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not raw_text:
+            return None
+        text = raw_text.strip()
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        try:
+            import re
+            match = re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return json.loads(match.group())
+        except Exception:
+            pass
+        return None
+
     async def acompose_structured(self, projection: Dict[str, Any], system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         raw_text = await self.acomplete(system_prompt, user_prompt)
-        if raw_text:
-            try:
-                import re
-                match = re.search(r'\{[\s\S]*\}', raw_text)
-                if match:
-                    parsed = json.loads(match.group())
-                    if "body" in parsed:
-                        return parsed
-            except Exception as e:
-                logger.warning(f"Failed to parse LLM structured output: {e}")
-
+        parsed = self._parse_json(raw_text)
+        if parsed and "body" in parsed:
+            return parsed
         return _generate_grounded_fallback(projection)
 
-    async def areply_structured(self, projection: Dict[str, Any], inbound_msg: str, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    async def areply_structured(self, projection: Dict[str, Any], inbound_msg: str, system_prompt: str, user_prompt: str, intent: str = "") -> Dict[str, Any]:
         raw_text = await self.acomplete(system_prompt, user_prompt)
-        if raw_text:
-            try:
-                import re
-                match = re.search(r'\{[\s\S]*\}', raw_text)
-                if match:
-                    parsed = json.loads(match.group())
-                    if "action" in parsed:
-                        return parsed
-            except Exception as e:
-                logger.warning(f"Failed to parse LLM reply output: {e}")
-
-        return _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_msg)
+        parsed = self._parse_json(raw_text)
+        if parsed and "action" in parsed:
+            return parsed
+        return _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_msg, intent=intent)
 
     def compose_structured(self, projection: Dict[str, Any], system_prompt: str, user_prompt: str) -> Dict[str, Any]:
         raw_text = self.complete(system_prompt, user_prompt)
-        if raw_text:
-            try:
-                import re
-                match = re.search(r'\{[\s\S]*\}', raw_text)
-                if match:
-                    parsed = json.loads(match.group())
-                    if "body" in parsed:
-                        return parsed
-            except Exception as e:
-                logger.warning(f"Failed to parse LLM structured output: {e}")
-
-        # Seamless deterministic contextual fallback
+        parsed = self._parse_json(raw_text)
+        if parsed and "body" in parsed:
+            return parsed
         return _generate_grounded_fallback(projection)
 
-    def reply_structured(self, projection: Dict[str, Any], inbound_msg: str, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    def reply_structured(self, projection: Dict[str, Any], inbound_msg: str, system_prompt: str, user_prompt: str, intent: str = "") -> Dict[str, Any]:
         raw_text = self.complete(system_prompt, user_prompt)
-        if raw_text:
-            try:
-                import re
-                match = re.search(r'\{[\s\S]*\}', raw_text)
-                if match:
-                    parsed = json.loads(match.group())
-                    if "action" in parsed:
-                        return parsed
-            except Exception as e:
-                logger.warning(f"Failed to parse LLM reply output: {e}")
-
-        return _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_msg)
+        parsed = self._parse_json(raw_text)
+        if parsed and "action" in parsed:
+            return parsed
+        return _generate_grounded_fallback(projection, is_reply=True, inbound_msg=inbound_msg, intent=intent)
 
 llm_client = LLMClient()
 
