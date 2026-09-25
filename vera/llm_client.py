@@ -29,9 +29,9 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
                     break
             return {
                 "action": "send",
-                "body": f"Done! I've prepared the campaign draft{extra_param} for {merchant.get('name')} and we're ready to proceed. Shall I share the preview with you now to review?",
+                "body": f"Great, noted{extra_param}! Let me pull up the recommended options for {merchant.get('name')} — shall I send you the specific plan details now so you can review and confirm?",
                 "cta": "binary_yes_no",
-                "rationale": "Transitioned to action mode upon merchant acceptance; confirmed draft preparation and ready to proceed."
+                "rationale": "Transitioned to action mode on merchant acceptance; offered to share specific plan details for review."
             }
         elif "gst" in inbound_lower or "tax" in inbound_lower:
             return {
@@ -358,24 +358,90 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     elif "ipl" in kind:
         match_info = t_payload.get("match", "Tonight's match")
         return {
-            "body": f"Hi {owner_name}, {match_info} is scheduled! For {merchant.get('name')}, delivery demand typically surges during evening innings. I've prepared a match-time combo offer for your profile. Want me to activate it?",
+            "body": f"Hi {owner_name}, {match_info} is coming up! For {merchant.get('name')}, delivery demand typically surges during evening innings. Want me to set up a match-time combo offer on your profile to capture that traffic?",
             "cta": "binary_yes_no",
             "template_name": "vera_ipl_v1",
             "template_params": [owner_name, match_info],
             "send_as": "vera",
-            "rationale": "Match-day demand capitalization tailored to food & beverage timing."
+            "rationale": "Match-day demand capitalization — asks permission before activating anything."
         }
 
-    # Default fallback
+    # ── Default fallback: use the strongest available grounded fact ──────────
     loc_phrase = f" in {merchant.get('locality')}" if merchant.get('locality') else ""
+    merchant_name = merchant.get("name", "your business")
+    perf = merchant.get("performance", {})
+    active_offers = merchant.get("active_offers", [])
+
+    # Priority 1: performance metric we can anchor on
+    views = perf.get("views")
+    leads = perf.get("leads")
+    delta_7d = perf.get("delta_7d", {})
+    best_delta_key = next(
+        (k for k in ["calls_pct", "views_pct", "leads_pct"] if delta_7d.get(k) is not None),
+        None
+    )
+    if best_delta_key and delta_7d.get(best_delta_key) is not None:
+        raw_delta = delta_7d[best_delta_key]
+        metric_label = best_delta_key.replace("_pct", "")
+        direction = "up" if raw_delta > 0 else "down"
+        delta_phrase = f"{int(round(abs(raw_delta) * 100))}%"
+        body_text = (
+            f"Hi {owner_name}, quick update on {merchant_name}{loc_phrase}: "
+            f"{metric_label} is {direction} {delta_phrase} this week. "
+            f"Want to see what's driving this and what we can do to improve it?"
+        )
+        return {
+            "body": body_text,
+            "cta": "binary_yes_no",
+            "template_name": "vera_checkin_v1",
+            "template_params": [owner_name, metric_label, delta_phrase],
+            "send_as": "vera",
+            "rationale": f"Used grounded {metric_label} delta ({delta_phrase}) from performance data as check-in anchor."
+        }
+
+    # Priority 2: views or leads count (absolute)
+    if views or leads:
+        metric_label = "views" if views else "leads"
+        count_val = views or leads
+        body_text = (
+            f"Hi {owner_name}, {merchant_name}{loc_phrase} had {count_val} {metric_label} recently. "
+            f"Want a quick look at what's working and what we can improve this week?"
+        )
+        return {
+            "body": body_text,
+            "cta": "binary_yes_no",
+            "template_name": "vera_checkin_v1",
+            "template_params": [owner_name, str(count_val), metric_label],
+            "send_as": "vera",
+            "rationale": f"Used grounded {metric_label} count ({count_val}) as check-in anchor."
+        }
+
+    # Priority 3: active offer
+    if active_offers:
+        offer_title = active_offers[0].get("title", "your current offer")
+        body_text = (
+            f"Hi {owner_name}, your active offer '{offer_title}' is live on {merchant_name}{loc_phrase}. "
+            f"Want to check how it's performing and whether boosting it would help this week?"
+        )
+        return {
+            "body": body_text,
+            "cta": "binary_yes_no",
+            "template_name": "vera_checkin_v1",
+            "template_params": [owner_name, offer_title],
+            "send_as": "vera",
+            "rationale": f"Used grounded active offer '{offer_title}' as check-in anchor."
+        }
+
+    # Priority 4: bare locality check-in (no fabricated facts)
     return {
-        "body": f"Hi {owner_name}, check-in from Vera for {merchant.get('name')}{loc_phrase}. Would you like a quick overview of your profile performance and recommended growth actions for this week?",
+        "body": f"Hi {owner_name}, check-in from Vera for {merchant_name}{loc_phrase}. Would you like a quick overview of your profile performance and recommended growth actions for this week?",
         "cta": "binary_yes_no",
         "template_name": "vera_checkin_v1",
         "template_params": [owner_name],
         "send_as": "vera",
-        "rationale": "General grounded check-in offering merchant performance overview without asserting unverified activity facts."
+        "rationale": "General grounded check-in — no performance or offer data available to anchor on."
     }
+
 
 class LLMClient:
     def __init__(self):

@@ -95,36 +95,87 @@ class FactRegistry:
     @staticmethod
     def verify_grounding(body: str, facts: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """
-        Validates that numbers, currency amounts, or percentages mentioned in body can be grounded.
+        Validates that numbers, currency amounts, percentages, offer names, source names
+        and completion-action claims in body can all be grounded to projected context.
         Returns (is_valid: bool, issues: List[str]).
         """
         allowed_nums = facts.get("allowed_numbers", set())
+        allowed_offers = facts.get("allowed_offers", set())
+        allowed_sources = facts.get("allowed_sources", set())
         issues = []
-        
-        # Extract currency amounts
+
+        # ── 1. Currency amounts ─────────────────────────────────────────────
         currencies = re.findall(r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', body)
         for c in currencies:
             clean_c = c.replace(",", "")
             if clean_c not in allowed_nums and str(int(float(clean_c))) not in allowed_nums:
                 issues.append(f"Ungrounded currency claim: ₹{c}")
 
-        # Extract distances e.g. 1.3km or 1.3 km
+        # ── 2. Distances ────────────────────────────────────────────────────
         distances = re.findall(r'\b(\d+(?:\.\d+)?)\s*km\b', body, re.IGNORECASE)
         for d in distances:
             if d not in allowed_nums and str(int(float(d))) not in allowed_nums:
                 issues.append(f"Ungrounded distance claim: {d}km")
 
-        # Extract trial sample sizes e.g. n=2100 or n = 2100
+        # ── 3. Clinical trial sample sizes (n=…) ───────────────────────────
         trials = re.findall(r'\bn\s*=\s*(\d+)\b', body, re.IGNORECASE)
         for t in trials:
             if t not in allowed_nums:
                 issues.append(f"Ungrounded clinical trial sample size: n={t}")
 
-        # Extract YYYY-MM-DD date claims
+        # ── 4. ISO dates ────────────────────────────────────────────────────
         dates = re.findall(r'\b(\d{4}-\d{2}-\d{2})\b', body)
         allowed_dates = facts.get("allowed_dates", set())
         for dt in dates:
             if dt.lower() not in allowed_dates:
                 issues.append(f"Ungrounded specific date claim: {dt}")
+
+        # ── 5. Offer name validation ────────────────────────────────────────
+        # Patterns: "our <Offer Title>" / "activate <Offer Title>" / "@₹…" already covered by #1.
+        # Check quoted-style offer names in the message against known offer titles.
+        if allowed_offers:
+            # Find candidate offer-like tokens: Title Case multi-word phrases preceded by
+            # typical offer-intro words. We look for anything that looks like an offer name
+            # that is NOT in the allowed set.
+            offer_intro = re.findall(
+                r'(?:offer|deal|discount|combo|plan|package|bundle|spotlight|promotion)[:\s]+([A-Z][A-Za-z0-9 &\'/-]{3,50})',
+                body
+            )
+            for candidate in offer_intro:
+                candidate_lower = candidate.strip().lower()
+                if candidate_lower and not any(
+                    candidate_lower in allowed_o or allowed_o in candidate_lower
+                    for allowed_o in allowed_offers
+                ):
+                    issues.append(f"Possible ungrounded offer name: '{candidate.strip()}'")
+
+        # ── 6. Source / journal name validation ────────────────────────────
+        # Flag named sources cited with "according to", "published in", "per <Source>", etc.
+        if allowed_sources:
+            source_refs = re.findall(
+                r'(?:according to|published in|per|from|in|study in|findings in|report by)\s+([A-Z][A-Za-z0-9 &\'.-]{2,60}?)(?:[,.\n]|$)',
+                body
+            )
+            for src_candidate in source_refs:
+                src_lower = src_candidate.strip().lower()
+                if src_lower and len(src_lower) > 3 and not any(
+                    src_lower in allowed_s or allowed_s in src_lower
+                    for allowed_s in allowed_sources
+                ):
+                    issues.append(f"Possible ungrounded source citation: '{src_candidate.strip()}'")
+
+        # ── 7. Fabricated completion / action claims ────────────────────────
+        # These phrases assert that Vera has already taken an action — which is never true
+        # in a proactive template message. Flag them as unverifiable.
+        ACTION_CLAIM_PATTERNS = [
+            r"\bI(?:'ve| have) (?:prepared|booked|scheduled|registered|activated|submitted|sent|confirmed|set up|set-up|created|drafted|built|generated)\b",
+            r"\bSlots? (?:are|is) (?:available|open|ready)\b",
+            r"\bAppointment (?:has been|is) (?:booked|scheduled|confirmed|created)\b",
+            r"\bCampaign (?:has been|is) (?:activated|live|launched|started|running)\b",
+            r"\bOffer (?:has been|is) (?:activated|live|launched|applied|set up)\b",
+        ]
+        for pattern in ACTION_CLAIM_PATTERNS:
+            if re.search(pattern, body, re.IGNORECASE):
+                issues.append(f"Unverifiable action claim detected (pattern: {pattern[:50]}…)")
 
         return len(issues) == 0, issues

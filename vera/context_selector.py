@@ -13,8 +13,37 @@ def project_context_for_trigger(
     kind = trigger.get("kind", "")
     t_payload = trigger.get("payload", {})
 
-    # 1. Project Trigger Facts (omit raw unparsed placeholders)
-    clean_payload = {k: v for k, v in t_payload.items() if k != "placeholder"}
+    # ── Per-kind payload allowlists ─────────────────────────────────────────
+    # Only the fields semantically relevant to the trigger kind are forwarded.
+    # Everything else (placeholder keys, unused fields) is silently dropped.
+    KIND_PAYLOAD_FIELDS: Dict[str, list] = {
+        "perf_dip":             ["metric", "delta_pct", "window"],
+        "perf_spike":           ["metric", "delta_pct", "window"],
+        "milestone_reached":    ["metric", "milestone_value", "count"],
+        "festival_upcoming":    ["festival", "days_until"],
+        "ipl_match_tonight":    ["match", "festival"],
+        "research_digest":      ["top_item_id", "category"],
+        "competitor_opened":    ["competitor", "distance_km"],
+        "renewal_due":          ["plan", "days_remaining"],
+        "refill_due":           ["molecule_list", "last_refill", "stock_runs_out_iso"],
+        "chronic_refill_due":   ["molecule_list", "last_refill", "deadline_iso"],
+        "recall_due":           ["recall_reason", "available_slots"],
+        "customer_winback":     ["last_visit_days", "visit_count"],
+        "lapsed_customer":      ["last_visit_days"],
+        "curious_ask_due":      [],
+        "scheduled_recurring":  [],
+        "dormant_merchant":     [],
+        "unverified_listing":   [],
+    }
+    allowed_fields = KIND_PAYLOAD_FIELDS.get(kind)
+    if allowed_fields is not None:
+        # Known kind: project only the allowed fields that are actually present
+        clean_payload = {k: t_payload[k] for k in allowed_fields if k in t_payload}
+    else:
+        # Unknown / novel trigger: strip placeholder keys but keep everything else
+        # so adaptive handling has enough signal
+        clean_payload = {k: v for k, v in t_payload.items() if k != "placeholder"}
+
     projected_trigger = {
         "id": trigger.get("id"),
         "kind": kind,
@@ -22,6 +51,7 @@ def project_context_for_trigger(
         "urgency": trigger.get("urgency", 3),
         "payload": clean_payload
     }
+
 
     # 2. Project Merchant Facts (tailored per trigger kind)
     projected_merchant = {}

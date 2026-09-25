@@ -149,7 +149,8 @@ def test_reply_intent_transition_and_hostile():
     })
     assert rep1.status_code == 200
     assert rep1.json()["action"] == "send"
-    assert any(w in rep1.json()["body"].lower() for w in ["done", "set", "proceed", "schedule", "motion"])
+    assert any(w in rep1.json()["body"].lower() for w in ["noted", "confirm", "details", "proceed", "great", "plan"])
+
 
     # Opt-out / Hostile termination
     rep2 = client.post("/v1/reply", json={

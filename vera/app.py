@@ -44,7 +44,7 @@ async def metadata():
         approach=settings.approach,
         contact_email=settings.contact_email,
         version=settings.version,
-        submitted_at="2026-04-26T08:00:00Z"
+        submitted_at=settings.submitted_at
     )
 
 @app.post("/v1/context")

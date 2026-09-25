@@ -26,6 +26,7 @@ class Settings(BaseModel):
     model_name: str = Field(default_factory=lambda: os.getenv("BOT_MODEL_NAME", "gemini-1.5-flash"))
     approach: str = Field(default_factory=lambda: os.getenv("BOT_APPROACH", "Deterministic context-projected strategy router with async structured LLM composition, FactRegistry validation & bounded state machine"))
     contact_email: str = Field(default_factory=lambda: os.getenv("CONTACT_EMAIL", "gaganxpreet@gmail.com"))
+    submitted_at: str = Field(default_factory=lambda: os.getenv("SUBMITTED_AT", "2026-09-26T00:00:00Z"))
     version: str = "1.0.0"
 
 settings = Settings()

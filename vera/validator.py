@@ -82,12 +82,17 @@ class OutputValidator:
             body = (output.get("body") or "").strip()
             if not body:
                 body = "Understood! Proceeding with the discussed update."
-            # Anti-repetition
+            # Anti-repetition: if exact same reply body was already sent, switch to wait to avoid repetitive looping
             body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
             if body_hash in previous_body_hashes:
-                body = f"Following up to confirm our next step: {body}"
+                output["action"] = "wait"
+                output["wait_seconds"] = 14400
+                output["body"] = None
+                output["cta"] = None
+                output["rationale"] = "Duplicate reply body detected without new context; transitioned to wait state to prevent looping."
+                return output
+
             output["body"] = body
-            
             cta = output.get("cta")
             if cta not in VALID_CTAS:
                 output["cta"] = "binary_yes_no"

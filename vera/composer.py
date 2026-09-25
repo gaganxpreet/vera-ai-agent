@@ -128,13 +128,13 @@ class MessageComposer:
         # 3. Check for repeated Auto-reply
         if inbound_intent == "AUTO_REPLY":
             conv_state.auto_reply_count += 1
-            m_count = conversation_store.record_auto_reply(conv_state.merchant_id)
-            if conv_state.auto_reply_count >= 2 or m_count >= 3:
+            conversation_store.record_auto_reply(conv_state.merchant_id)  # track for analytics only
+            if conv_state.auto_reply_count >= 2:
                 conv_state.status = "ENDED"
                 conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message, action="end")
                 return ReplyResponse(
                     action="end",
-                    rationale="Repeated canned auto-reply detected. Ending conversation gracefully to avoid spamming automated inbox."
+                    rationale="Repeated canned auto-reply detected in this conversation. Ending gracefully to avoid spamming automated inbox."
                 )
             else:
                 conv_state.status = "WAITING"
@@ -142,7 +142,7 @@ class MessageComposer:
                 return ReplyResponse(
                     action="wait",
                     wait_seconds=14400,
-                    rationale="Detected canned auto-reply phrasing ('Thank you for contacting'). Waiting 4 hours for human operator."
+                    rationale="Detected canned auto-reply phrasing ('Thank you for contacting'). Waiting 4 hours for a human operator."
                 )
 
         # 4. Check for Acceptance / Commitment -> Switch to ACTION mode immediately
