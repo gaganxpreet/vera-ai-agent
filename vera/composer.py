@@ -1,0 +1,170 @@
+import uuid
+from typing import Dict, Any, Optional
+from vera.context_store import context_store
+from vera.context_selector import project_context_for_trigger
+from vera.strategies import TriggerStrategy, get_strategy_for_kind
+from vera.prompt_builder import build_composition_prompt, build_reply_prompt
+from vera.llm_client import llm_client
+from vera.validator import output_validator
+from vera.conversation_state import conversation_store
+from vera.suppression import suppression_manager
+from vera.models import ProactiveAction, ReplyResponse
+
+class MessageComposer:
+    def compose_proactive_action(
+        self,
+        trigger_id: str,
+        trigger: Dict[str, Any],
+        strategy: TriggerStrategy
+    ) -> Optional[ProactiveAction]:
+        """
+        Executes proactive composition flow:
+        Resolve linked entities -> project context -> build prompt -> LLM -> validate -> format
+        """
+        mid = trigger.get("merchant_id")
+        cid = trigger.get("customer_id")
+        
+        merchant = context_store.get("merchant", mid) if mid else None
+        category_slug = merchant.get("category_slug") if merchant else trigger.get("payload", {}).get("category")
+        category = context_store.get("category", category_slug) if category_slug else None
+        customer = context_store.get("customer", cid) if cid else None
+
+        # Build projected minimal context view
+        projection = project_context_for_trigger(category, merchant, trigger, customer)
+        
+        # Conversation identifier
+        conv_id = f"conv_{mid}_{trigger.get('kind')}_{uuid.uuid4().hex[:6]}"
+        conv_state = conversation_store.get_or_create(conv_id, merchant_id=mid, customer_id=cid)
+
+        # Build prompt & query LLM
+        prompts = build_composition_prompt(projection, strategy, conv_state)
+        raw_res = llm_client.compose_structured(projection, prompts["system"], prompts["user"])
+
+        # Deterministic validation and repair
+        validated = output_validator.validate_and_repair_proactive(
+            raw_res,
+            expected_send_as=strategy.send_as,
+            expected_cta=strategy.cta_type,
+            template_name=strategy.template_name,
+            previous_body_hashes=conv_state.previous_body_hashes
+        )
+
+        # Update conversation state & mark suppression
+        suppression_key = trigger.get("suppression_key", f"trg:{trigger_id}")
+        suppression_manager.mark_suppressed(suppression_key)
+        
+        conv_state.last_trigger_id = trigger_id
+        conv_state.last_suppression_key = suppression_key
+        conv_state.status = "PROACTIVE_SENT"
+        conversation_store.record_turn(conv_id, role=validated["send_as"], message=validated["body"], action="send")
+
+        return ProactiveAction(
+            conversation_id=conv_id,
+            merchant_id=mid or "unknown",
+            customer_id=cid,
+            send_as=validated["send_as"],
+            trigger_id=trigger_id,
+            template_name=validated["template_name"],
+            template_params=validated.get("template_params", []),
+            body=validated["body"],
+            cta=validated["cta"],
+            suppression_key=suppression_key,
+            rationale=validated["rationale"]
+        )
+
+    def compose_reply(
+        self,
+        conversation_id: str,
+        merchant_id: Optional[str],
+        customer_id: Optional[str],
+        from_role: str,
+        inbound_message: str,
+        turn_number: int
+    ) -> ReplyResponse:
+        """
+        Executes reply flow:
+        State classification -> intent transition -> auto-reply check -> opt-out -> LLM -> reply response
+        """
+        conv_state = conversation_store.get_or_create(conversation_id, merchant_id=merchant_id, customer_id=customer_id)
+        
+        # 1. Classify inbound intent
+        inbound_intent = conversation_store.classify_inbound(inbound_message)
+        conv_state.intent = inbound_intent
+
+        # 2. Check for explicit Opt-out / Hostile Stop
+        if inbound_intent == "OPT_OUT":
+            conv_state.opt_out = True
+            conv_state.status = "OPTED_OUT"
+            if conv_state.merchant_id:
+                suppression_manager.opt_out_merchant(conv_state.merchant_id)
+            if conv_state.customer_id:
+                suppression_manager.opt_out_customer(conv_state.customer_id)
+            conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message, action="end")
+            return ReplyResponse(
+                action="end",
+                rationale="Merchant/customer explicitly opted out. Stopped conversation and suppressed future outreach."
+            )
+
+        # 3. Check for repeated Auto-reply
+        if inbound_intent == "AUTO_REPLY":
+            conv_state.auto_reply_count += 1
+            m_count = conversation_store.record_auto_reply(conv_state.merchant_id)
+            if conv_state.auto_reply_count >= 2 or m_count >= 2:
+                conv_state.status = "ENDED"
+                conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message, action="end")
+                return ReplyResponse(
+                    action="end",
+                    rationale="Repeated canned auto-reply detected. Ending conversation gracefully to avoid spamming automated inbox."
+                )
+            else:
+                conv_state.status = "WAITING"
+                conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message, action="wait")
+                return ReplyResponse(
+                    action="wait",
+                    wait_seconds=14400,
+                    rationale="Detected canned auto-reply phrasing ('Thank you for contacting'). Waiting 4 hours for human operator."
+                )
+
+        # 4. Check for Acceptance / Commitment -> Switch to ACTION mode immediately
+        if inbound_intent == "ACCEPTANCE":
+            conv_state.mode = "ACTION"
+            conv_state.status = "ACTION_PENDING"
+
+        # Record incoming turn
+        conversation_store.record_turn(conversation_id, role=from_role, message=inbound_message)
+
+        # Resolve context for prompt
+        merchant = context_store.get("merchant", conv_state.merchant_id) if conv_state.merchant_id else None
+        category_slug = merchant.get("category_slug") if merchant else None
+        category = context_store.get("category", category_slug) if category_slug else None
+        customer = context_store.get("customer", conv_state.customer_id) if conv_state.customer_id else None
+
+        # Build minimal projected context
+        dummy_trigger = {"kind": "conversation_reply", "payload": {}}
+        projection = project_context_for_trigger(category, merchant, dummy_trigger, customer)
+
+        recent_turns = [{"role": t.role, "message": t.message} for t in conv_state.turns[-4:]]
+
+        prompts = build_reply_prompt(inbound_message, inbound_intent, conv_state.mode, projection, recent_turns)
+        raw_res = llm_client.reply_structured(projection, inbound_message, prompts["system"], prompts["user"])
+
+        # Deterministic validation
+        validated = output_validator.validate_and_repair_reply(raw_res, conv_state.previous_body_hashes)
+        
+        # Record bot reply turn
+        conversation_store.record_turn(
+            conversation_id,
+            role="vera",
+            message=validated.get("body", ""),
+            action=validated["action"]
+        )
+
+        return ReplyResponse(
+            action=validated["action"],
+            body=validated.get("body"),
+            cta=validated.get("cta"),
+            wait_seconds=validated.get("wait_seconds"),
+            rationale=validated["rationale"]
+        )
+
+composer = MessageComposer()

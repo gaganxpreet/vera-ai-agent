@@ -1,0 +1,31 @@
+import os
+from pydantic import BaseModel, Field
+
+class Settings(BaseModel):
+    bot_host: str = Field(default_factory=lambda: os.getenv("BOT_HOST", "0.0.0.0"))
+    bot_port: int = Field(default_factory=lambda: int(os.getenv("BOT_PORT", "8080")))
+    bot_url: str = Field(default_factory=lambda: os.getenv("BOT_URL", "http://localhost:8080"))
+    
+    # LLM Settings
+    llm_provider: str = Field(default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini"))
+    gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")))
+    gemini_model: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
+    
+    openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    openai_model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    
+    anthropic_api_key: str = Field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
+    anthropic_model: str = Field(default_factory=lambda: os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"))
+    
+    groq_api_key: str = Field(default_factory=lambda: os.getenv("GROQ_API_KEY", ""))
+    groq_model: str = Field(default_factory=lambda: os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"))
+
+    # Bot Metadata
+    team_name: str = Field(default_factory=lambda: os.getenv("TEAM_NAME", "Team Vera Growth Engine"))
+    team_members: list[str] = Field(default_factory=lambda: ["AI Engineer & Lead Architect"])
+    model_name: str = Field(default_factory=lambda: os.getenv("BOT_MODEL_NAME", "gemini-1.5-flash"))
+    approach: str = Field(default_factory=lambda: os.getenv("BOT_APPROACH", "Deterministic context-projected strategy router with structured LLM composition & rule validator"))
+    contact_email: str = Field(default_factory=lambda: os.getenv("CONTACT_EMAIL", "vera-lead@magicpin.in"))
+    version: str = "1.0.0"
+
+settings = Settings()
