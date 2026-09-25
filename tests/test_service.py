@@ -474,3 +474,38 @@ def test_reply_prompt_includes_context_projection():
     assert "40%" in prompts["user"] or "-0.4" in prompts["user"]
 
 
+def test_semantic_type_grounding_rejects_mismatched_distance_claim():
+    """Validator rejects distance claim (720km) even if 720 exists as a view count in peer stats."""
+    from vera.validator import output_validator
+
+    projection = {
+        "merchant": {"name": "Dental Hub", "locality": "Lajpat Nagar", "owner_first_name": "Dr. Sameer"},
+        "category": {"slug": "dentists", "peer_stats": {"avg_views_30d": 720}},
+        "trigger": {"kind": "competitor_opened", "payload": {"competitor": "Smile Clinic", "distance_km": 1.3}}
+    }
+
+    # Raw LLM output misusing 720 views as a 720km distance claim
+    mismatched_raw = {
+        "body": "Hi Dr. Sameer, a competitor opened 720km away in Lajpat Nagar. Want to see recommendations?",
+        "cta": "binary_yes_no",
+        "send_as": "vera",
+        "template_name": "vera_competitor_alert_v1",
+        "template_params": ["Dr. Sameer", "720km"],
+        "rationale": "Mismatched distance claim"
+    }
+
+    validated = output_validator.validate_and_repair_proactive(
+        mismatched_raw,
+        expected_send_as="vera",
+        expected_cta="binary_yes_no",
+        template_name="vera_competitor_alert_v1",
+        previous_body_hashes=[],
+        projection=projection
+    )
+
+    # 720km distance claim must be caught and replaced with grounded distance (1.3km)
+    assert "720km" not in validated["body"]
+    assert "1.3km" in validated["body"]
+
+
+

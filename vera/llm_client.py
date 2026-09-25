@@ -29,9 +29,9 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
                     break
             return {
                 "action": "send",
-                "body": f"Great, noted{extra_param}! Let me pull up the recommended options for {merchant.get('name')} — shall I send you the specific plan details now so you can review and confirm?",
-                "cta": "binary_yes_no",
-                "rationale": "Transitioned to action mode on merchant acceptance; offered to share specific plan details for review."
+                "body": f"Great! Confirmed{extra_param} for {merchant.get('name')}. We'll proceed with activating the campaign options as discussed.",
+                "cta": "none",
+                "rationale": "Transitioned to action execution upon merchant acceptance."
             }
         elif "gst" in inbound_lower or "tax" in inbound_lower:
             return {

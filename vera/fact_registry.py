@@ -5,8 +5,8 @@ class FactRegistry:
     @staticmethod
     def extract_allowed_facts(projection: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Extracts all verifiable facts (names, numbers, percentages, prices, sources, dates, offers)
-        from projected context to serve as the ground-truth boundary.
+        Extracts structured, type-specific verifiable facts (prices, distances, sample sizes,
+        percentages, dates, names, offers, sources) to serve as ground-truth boundaries.
         """
         merchant = projection.get("merchant", {})
         category = projection.get("category", {})
@@ -15,6 +15,10 @@ class FactRegistry:
         t_payload = trigger.get("payload", {})
 
         allowed_numbers: Set[str] = set()
+        allowed_prices: Set[str] = set()
+        allowed_distances: Set[str] = set()
+        allowed_sample_sizes: Set[str] = set()
+        allowed_percentages: Set[str] = set()
         allowed_names: Set[str] = set()
         allowed_sources: Set[str] = set()
         allowed_offers: Set[str] = set()
@@ -38,37 +42,59 @@ class FactRegistry:
             allowed_sources.add(item["source"].lower())
         if item.get("title"):
             allowed_sources.add(item["title"].lower())
+        if item.get("trial_n") is not None:
+            allowed_sample_sizes.add(str(item["trial_n"]))
 
-        # Active & category offers
-        for off in merchant.get("active_offers", []):
+        # Active & category offers & prices
+        for off in merchant.get("active_offers", []) + merchant.get("offers", []):
             if off.get("title"):
                 allowed_offers.add(off["title"].lower())
+                # Extract prices from offer titles (e.g. ₹299 -> 299)
+                for price_match in re.findall(r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', off["title"]):
+                    clean_p = price_match.replace(",", "")
+                    allowed_prices.add(clean_p)
+                    allowed_prices.add(str(int(float(clean_p))))
         for off in category.get("offer_catalog", []):
             if off.get("title"):
                 allowed_offers.add(off["title"].lower())
+                for price_match in re.findall(r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', off["title"]):
+                    clean_p = price_match.replace(",", "")
+                    allowed_prices.add(clean_p)
+                    allowed_prices.add(str(int(float(clean_p))))
+
+        # Specific payload fields (distances, prices, sample sizes)
+        if t_payload.get("distance_km") is not None:
+            dist_str = str(t_payload["distance_km"])
+            allowed_distances.add(dist_str)
+            if "." in dist_str and dist_str.endswith(".0"):
+                allowed_distances.add(dist_str.split(".")[0])
+        if t_payload.get("renewal_amount") is not None:
+            allowed_prices.add(str(t_payload["renewal_amount"]))
 
         # Extract dates from trigger payload (ISO dates, days, etc.)
         for k in ["deadline_iso", "last_refill", "stock_runs_out_iso", "expires_at", "window"]:
             v = t_payload.get(k)
             if v and isinstance(v, str):
                 allowed_dates.add(v.lower())
-                # also add YYYY-MM-DD substring if present
                 for d_match in re.findall(r'\b\d{4}-\d{2}-\d{2}\b', v):
                     allowed_dates.add(d_match)
 
-        # Numbers from payload & merchant data
+        # General numbers and percentage deltas
         def collect_numbers(obj: Any):
             if isinstance(obj, (int, float)):
-                allowed_numbers.add(str(obj))
-                allowed_numbers.add(str(int(obj)))
-                # If percentage delta e.g. -0.50 -> 50%
+                str_val = str(obj)
+                int_val = str(int(obj))
+                allowed_numbers.add(str_val)
+                allowed_numbers.add(int_val)
                 if abs(obj) <= 1.0 and obj != 0:
                     pct_int = int(round(abs(obj) * 100))
-                    allowed_numbers.add(str(pct_int))
-                    allowed_numbers.add(f"{pct_int}%")
+                    allowed_percentages.add(str(pct_int))
+                    allowed_percentages.add(f"{pct_int}%")
             elif isinstance(obj, str):
                 for m in re.findall(r'\b\d+(?:\.\d+)?%?', obj):
                     allowed_numbers.add(m)
+                    if "%" in m:
+                        allowed_percentages.add(m.replace("%", ""))
             elif isinstance(obj, dict):
                 for v in obj.values():
                     collect_numbers(v)
@@ -85,6 +111,10 @@ class FactRegistry:
 
         return {
             "allowed_numbers": allowed_numbers,
+            "allowed_prices": allowed_prices,
+            "allowed_distances": allowed_distances,
+            "allowed_sample_sizes": allowed_sample_sizes,
+            "allowed_percentages": allowed_percentages,
             "allowed_names": allowed_names,
             "allowed_sources": allowed_sources,
             "allowed_offers": allowed_offers,
@@ -95,32 +125,45 @@ class FactRegistry:
     @staticmethod
     def verify_grounding(body: str, facts: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """
-        Validates that numbers, currency amounts, percentages, offer names, source names
-        and completion-action claims in body can all be grounded to projected context.
+        Validates that numbers, currency amounts, percentages, distances, offer names, source names
+        and completion-action claims in body can all be grounded to their exact type-specific evidence sets.
         Returns (is_valid: bool, issues: List[str]).
         """
         allowed_nums = facts.get("allowed_numbers", set())
+        allowed_prices = facts.get("allowed_prices", set())
+        allowed_distances = facts.get("allowed_distances", set())
+        allowed_sample_sizes = facts.get("allowed_sample_sizes", set())
+        allowed_percentages = facts.get("allowed_percentages", set())
         allowed_offers = facts.get("allowed_offers", set())
         allowed_sources = facts.get("allowed_sources", set())
         issues = []
 
-        # ── 1. Currency amounts ─────────────────────────────────────────────
+        # ── 0. Percentages (must be in allowed_percentages or allowed_numbers) ─────
+        pct_claims = re.findall(r'\b(\d+(?:\.\d+)?)\s*%\b', body)
+        for pct in pct_claims:
+            clean_pct = pct.rstrip(".0") if pct.endswith(".0") else pct
+            if clean_pct not in allowed_percentages and pct not in allowed_nums and clean_pct not in allowed_nums:
+                issues.append(f"Ungrounded percentage claim: {pct}%")
+
+        # ── 1. Currency amounts (must be in allowed_prices or allowed_numbers) ─────
         currencies = re.findall(r'₹\s*(\d+(?:,\d+)*(?:\.\d+)?)', body)
         for c in currencies:
             clean_c = c.replace(",", "")
-            if clean_c not in allowed_nums and str(int(float(clean_c))) not in allowed_nums:
+            int_c = str(int(float(clean_c)))
+            if clean_c not in allowed_prices and clean_c not in allowed_nums and int_c not in allowed_prices and int_c not in allowed_nums:
                 issues.append(f"Ungrounded currency claim: ₹{c}")
 
-        # ── 2. Distances ────────────────────────────────────────────────────
+        # ── 2. Distances (must match explicit allowed_distances set) ────────────────
         distances = re.findall(r'\b(\d+(?:\.\d+)?)\s*km\b', body, re.IGNORECASE)
         for d in distances:
-            if d not in allowed_nums and str(int(float(d))) not in allowed_nums:
+            clean_d = d.rstrip(".0") if d.endswith(".0") else d
+            if allowed_distances and d not in allowed_distances and clean_d not in allowed_distances:
                 issues.append(f"Ungrounded distance claim: {d}km")
 
-        # ── 3. Clinical trial sample sizes (n=…) ───────────────────────────
+        # ── 3. Clinical trial sample sizes (must match allowed_sample_sizes) ────────
         trials = re.findall(r'\bn\s*=\s*(\d+)\b', body, re.IGNORECASE)
         for t in trials:
-            if t not in allowed_nums:
+            if allowed_sample_sizes and t not in allowed_sample_sizes:
                 issues.append(f"Ungrounded clinical trial sample size: n={t}")
 
         # ── 4. ISO dates ────────────────────────────────────────────────────
@@ -131,12 +174,7 @@ class FactRegistry:
                 issues.append(f"Ungrounded specific date claim: {dt}")
 
         # ── 5. Offer name validation ────────────────────────────────────────
-        # Patterns: "our <Offer Title>" / "activate <Offer Title>" / "@₹…" already covered by #1.
-        # Check quoted-style offer names in the message against known offer titles.
         if allowed_offers:
-            # Find candidate offer-like tokens: Title Case multi-word phrases preceded by
-            # typical offer-intro words. We look for anything that looks like an offer name
-            # that is NOT in the allowed set.
             offer_intro = re.findall(
                 r'(?:offer|deal|discount|combo|plan|package|bundle|spotlight|promotion)[:\s]+([A-Z][A-Za-z0-9 &\'/-]{3,50})',
                 body
@@ -150,7 +188,6 @@ class FactRegistry:
                     issues.append(f"Possible ungrounded offer name: '{candidate.strip()}'")
 
         # ── 6. Source / journal name validation ────────────────────────────
-        # Flag named sources cited with "according to", "published in", "per <Source>", etc.
         if allowed_sources:
             source_refs = re.findall(
                 r'(?:according to|published in|per|from|in|study in|findings in|report by)\s+([A-Z][A-Za-z0-9 &\'.-]{2,60}?)(?:[,.\n]|$)',
@@ -165,8 +202,6 @@ class FactRegistry:
                     issues.append(f"Possible ungrounded source citation: '{src_candidate.strip()}'")
 
         # ── 7. Fabricated completion / action claims ────────────────────────
-        # These phrases assert that Vera has already taken an action — which is never true
-        # in a proactive template message. Flag them as unverifiable.
         ACTION_CLAIM_PATTERNS = [
             r"\bI(?:'ve| have) (?:prepared|booked|scheduled|registered|activated|submitted|sent|confirmed|set up|set-up|created|drafted|built|generated)\b",
             r"\bSlots? (?:are|is) (?:available|open|ready)\b",
@@ -179,3 +214,4 @@ class FactRegistry:
                 issues.append(f"Unverifiable action claim detected (pattern: {pattern[:50]}…)")
 
         return len(issues) == 0, issues
+

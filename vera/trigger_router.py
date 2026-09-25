@@ -24,13 +24,13 @@ class TriggerRouter:
             if not trigger_data:
                 continue
 
-            # 1. Expiry check against current simulation time
+            # 1. Expiry check against current simulation time (at or past expires_at)
             expires_at = trigger_data.get("expires_at")
             if expires_at and now_dt:
                 try:
                     exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                    if now_dt > exp_dt:
-                        continue # Trigger has expired
+                    if now_dt >= exp_dt:
+                        continue # Trigger has reached or passed expiration
                 except Exception:
                     pass
 
@@ -77,8 +77,20 @@ class TriggerRouter:
 
                 scope_list = consent.get("scope", [])
                 kind = trigger_data.get("kind", "")
-                if "recall" in kind and not any(s in scope_list for s in ["recall_reminders", "appointment_reminders", "all"]):
-                    continue
+
+                CONSENT_SCOPE_BY_TRIGGER = {
+                    "recall_due": {"recall_reminders", "appointment_reminders", "all"},
+                    "chronic_refill_due": {"refill_reminders", "health_reminders", "all"},
+                    "refill_due": {"refill_reminders", "health_reminders", "all"},
+                    "appointment_tomorrow": {"appointment_reminders", "all"},
+                    "customer_winback": {"marketing", "winback", "all"},
+                    "lapsed_customer": {"marketing", "winback", "all"},
+                    "wedding_package_followup": {"marketing", "bridal_reminders", "all"},
+                }
+                required_scopes = CONSENT_SCOPE_BY_TRIGGER.get(kind)
+                if required_scopes:
+                    if not any(s in scope_list for s in required_scopes):
+                        continue # Customer consent scope does not cover this outreach type
 
             # 6. Strategy Resolution (with dynamic derivation for unseen triggers)
             strategy = get_strategy_for_kind(
