@@ -40,9 +40,15 @@ def project_context_for_trigger(
         # Known kind: project only the allowed fields that are actually present
         clean_payload = {k: t_payload[k] for k in allowed_fields if k in t_payload}
     else:
-        # Unknown / novel trigger: strip placeholder keys but keep everything else
-        # so adaptive handling has enough signal
-        clean_payload = {k: v for k, v in t_payload.items() if k != "placeholder"}
+        # Unknown / novel trigger: normalize metric delta aliases & strip raw placeholder keys
+        clean_payload = {}
+        for k, v in t_payload.items():
+            if k == "placeholder":
+                continue
+            if k in ["change", "decline", "drop", "change_pct", "decline_pct"] and "delta_pct" not in clean_payload:
+                clean_payload["delta_pct"] = v
+            else:
+                clean_payload[k] = v
 
     projected_trigger = {
         "id": trigger.get("id"),
@@ -84,10 +90,23 @@ def project_context_for_trigger(
                 "leads": perf.get("leads")
             }
 
-        # Include relevant active offer (single best offer)
+        # Select most relevant active offer (rank by trigger keyword relevance)
         active_offers = [o for o in merchant.get("offers", []) if o.get("status") == "active"]
         if active_offers:
-            projected_merchant["active_offers"] = [active_offers[0]]
+            # Score offer relevance to trigger
+            trigger_text = f"{kind} {clean_payload.get('intent_topic', '')} {clean_payload.get('program_title', '')} {clean_payload.get('recall_reason', '')}".lower()
+            def score_offer(o: dict) -> int:
+                title = o.get("title", "").lower()
+                off_cat = o.get("category", "").lower()
+                score = 0
+                if any(w in title for w in trigger_text.split() if len(w) > 3):
+                    score += 10
+                if off_cat and off_cat in trigger_text:
+                    score += 5
+                return score
+
+            best_offer = max(active_offers, key=score_offer)
+            projected_merchant["active_offers"] = [best_offer]
 
     # 3. Project Category Facts (strictly isolated)
     projected_category = {}

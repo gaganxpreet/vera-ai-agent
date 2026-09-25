@@ -58,22 +58,30 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
                 }
             elif kind == "research_digest":
                 item = category.get("target_digest_item", {})
-                source = item.get("source", "Peer Journal")
-                title = item.get("title", "the latest clinical findings")
+                source = item.get("source")
+                title = item.get("title")
+                if source and title:
+                    body_text = f"The study in {source} covers {title}. Would you like me to share the 2-minute summary and draft an education note for your patients?"
+                elif title:
+                    body_text = f"The clinical digest covers {title}. Would you like me to share the 2-minute summary?"
+                else:
+                    body_text = f"Would you like me to share the latest clinical digest summary relevant to {merchant.get('name')}?"
                 return {
                     "action": "send",
-                    "body": f"The study in {source} covers {title}. Would you like me to share the 2-minute summary and draft an education note for your patients?",
+                    "body": body_text,
                     "cta": "binary_yes_no",
-                    "rationale": "Preserved research digest trigger context to answer query with exact study citation."
+                    "rationale": "Preserved research digest trigger context to answer query."
                 }
             elif kind == "renewal_due":
-                plan = t_payload.get("plan") or merchant.get("subscription", {}).get("plan", "Pro")
-                days = t_payload.get("days_remaining") or merchant.get("subscription", {}).get("days_remaining", "upcoming")
+                plan = t_payload.get("plan") or merchant.get("subscription", {}).get("plan")
+                days = t_payload.get("days_remaining") or merchant.get("subscription", {}).get("days_remaining")
+                plan_str = f" {plan}" if plan else ""
+                days_str = f" has {days} days remaining" if days is not None else " is approaching renewal"
                 return {
                     "action": "send",
-                    "body": f"Your {merchant.get('name')} {plan} subscription has {days} days remaining. Renewing keeps your verified badge and priority ranking active. Want me to send the renewal link?",
+                    "body": f"Your {merchant.get('name')}{plan_str} subscription{days_str}. Renewing keeps your verified badge and priority ranking active. Want me to send the renewal link?",
                     "cta": "binary_yes_no",
-                    "rationale": "Preserved renewal trigger context with exact plan and days remaining."
+                    "rationale": "Preserved renewal trigger context."
                 }
             else:
                 return {
@@ -190,15 +198,16 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
 
     elif kind == "renewal_due":
         days = t_payload.get("days_remaining") or merchant.get("subscription", {}).get("days_remaining")
-        plan = t_payload.get("plan") or merchant.get("subscription", {}).get("plan", "business")
-        amt = t_payload.get("renewal_amount")
+        plan = t_payload.get("plan") or merchant.get("subscription", {}).get("plan")
         days_phrase = f"has {days} days remaining" if days is not None else "is due for renewal soon"
+        plan_str = f" {plan}" if plan else ""
+        amt = t_payload.get("renewal_amount")
         amt_phrase = f" (₹{amt})" if amt is not None else ""
         return {
-            "body": f"Hi {owner_name}, your {merchant.get('name')} {plan} subscription {days_phrase}{amt_phrase}. Renew today to keep your verified badge and priority search ranking active without disruption. Want me to generate the instant renewal link?",
+            "body": f"Hi {owner_name}, your {merchant.get('name')}{plan_str} subscription {days_phrase}{amt_phrase}. Renew today to keep your verified badge and priority search ranking active without disruption. Want me to generate the instant renewal link?",
             "cta": "binary_yes_no",
             "template_name": "vera_renewal_reminder_v1",
-            "template_params": [owner_name, str(plan), str(days or "soon")],
+            "template_params": [owner_name, str(plan or "business"), str(days or "soon")],
             "send_as": "vera",
             "rationale": "Continuity protection referencing verified subscription details without inventing amounts."
         }
@@ -206,14 +215,15 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     elif kind == "festival_upcoming":
         fest = t_payload.get("festival")
         days = t_payload.get("days_until")
-        days_phrase = f" in {days} days" if days is not None else " soon"
-        loc = merchant.get("locality") or "your area"
+        days_phrase = f" in {days} days" if days is not None else ""
+        loc = merchant.get("locality")
+        loc_phrase = f" across {loc}" if loc else ""
 
         if fest:
-            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Demand across {loc} usually surges for festive appointments. Want me to draft a festive promotion for Google & WhatsApp to capture that traffic?"
+            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Demand{loc_phrase} usually surges for festive appointments. Want me to draft a festive promotion for Google & WhatsApp to capture that traffic?"
             fest_param = fest
         else:
-            body_text = f"Hi {owner_name}, peak seasonal customer demand is approaching for {loc}. Want me to draft a seasonal promotion for {merchant.get('name')} to publish to Google & WhatsApp?"
+            body_text = f"Hi {owner_name}, peak seasonal customer demand is approaching{loc_phrase}. Want me to draft a seasonal promotion for {merchant.get('name')} to publish to Google & WhatsApp?"
             fest_param = "Seasonal Demand"
 
         return {
@@ -230,18 +240,18 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         m_name = merchant.get("name", "our salon")
         days_wed = t_payload.get("days_to_wedding")
         if days_wed:
-            timeline_phrase = f"With {days_wed} days until your wedding,"
+            timeline_phrase = f"With {days_wed} days until your wedding, "
             t_params = [cust_name, str(days_wed)]
         else:
-            timeline_phrase = "Following your bridal trial,"
+            timeline_phrase = ""
             t_params = [cust_name, m_name]
         return {
-            "body": f"Hi {cust_name} 💍 {m_name} here! {timeline_phrase} now is the ideal window to schedule your skin-prep program. Would you like us to reserve your preferred slot for session 1?",
+            "body": f"Hi {cust_name} 💍 {m_name} here! {timeline_phrase}now is the ideal window to schedule your skin-prep program. Would you like us to reserve your preferred slot for session 1?",
             "cta": "binary_yes_no",
             "template_name": "merchant_bridal_followup_v1",
             "template_params": t_params,
             "send_as": "merchant_on_behalf",
-            "rationale": "Warm bridal follow-up citing trial completion and countdown timeline if provided."
+            "rationale": "Warm bridal follow-up citing countdown timeline if provided."
         }
 
     elif kind == "curious_ask_due":
@@ -334,12 +344,13 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     elif "competitor" in kind:
         dist = t_payload.get("distance_km")
         dist_phrase = f" {dist}km away" if dist else ""
-        loc = merchant.get("locality") or "your area"
+        loc = merchant.get("locality")
+        loc_phrase = f" in {loc}" if loc else ""
         return {
-            "body": f"Hi {owner_name}, a new competitor opened{dist_phrase} in {loc}. To maintain your search visibility lead for {merchant.get('name')}, I suggest updating your featured offers. Want to see the recommendations?",
+            "body": f"Hi {owner_name}, a new competitor opened{dist_phrase}{loc_phrase}. To maintain your search visibility lead for {merchant.get('name')}, I suggest updating your featured offers. Want to see the recommendations?",
             "cta": "binary_yes_no",
             "template_name": "vera_competitor_alert_v1",
-            "template_params": [owner_name, str(dist or loc)],
+            "template_params": [owner_name, str(dist or loc or "nearby")],
             "send_as": "vera",
             "rationale": "Local competitive awareness anchored strictly on verified distance or locality."
         }

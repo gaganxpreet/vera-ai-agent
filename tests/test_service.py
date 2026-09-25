@@ -508,4 +508,38 @@ def test_semantic_type_grounding_rejects_mismatched_distance_claim():
     assert "1.3km" in validated["body"]
 
 
+def test_grounding_rejects_unsupported_source_and_action_claims():
+    """Validator rejects ungrounded source citations and fabricated pre-action claims."""
+    from vera.validator import output_validator
+
+    projection = {
+        "merchant": {"name": "Lajpat Dental", "owner_first_name": "Dr. Ankit"},
+        "category": {"slug": "dentists"},
+        "trigger": {"kind": "research_digest", "payload": {}}
+    }
+
+    # Raw LLM output with ungrounded journal source and fabricated action claim
+    hallucinated = {
+        "body": "Dr. Ankit, according to Harvard Medical Journal, I've booked your patient appointment. Want to see?",
+        "cta": "binary_yes_no",
+        "send_as": "vera",
+        "template_name": "vera_research_digest_v1",
+        "template_params": ["Dr. Ankit"],
+        "rationale": "Hallucinated source and action claim"
+    }
+
+    validated = output_validator.validate_and_repair_proactive(
+        hallucinated,
+        expected_send_as="vera",
+        expected_cta="binary_yes_no",
+        template_name="vera_research_digest_v1",
+        previous_body_hashes=[],
+        projection=projection
+    )
+
+    assert "Harvard Medical Journal" not in validated["body"]
+    assert "I've booked" not in validated["body"]
+
+
+
 
