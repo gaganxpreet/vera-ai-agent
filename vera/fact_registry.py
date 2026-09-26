@@ -1,6 +1,15 @@
 import re
 from typing import Dict, Any, Set, List, Tuple
 
+def _normalize_numeric_token(value: Any) -> str:
+    token = str(value).strip().replace(",", "").rstrip("%")
+    try:
+        number = float(token)
+    except (TypeError, ValueError):
+        return token
+    return str(int(number)) if number.is_integer() else format(number, "g")
+
+
 class FactRegistry:
     @staticmethod
     def extract_allowed_facts(projection: Dict[str, Any]) -> Dict[str, Any]:
@@ -143,10 +152,14 @@ class FactRegistry:
         issues = []
 
         # ── 0. Percentages (must be in allowed_percentages or allowed_numbers) ─────
-        pct_claims = re.findall(r'\b(\d+(?:\.\d+)?)\s*%\b', body)
+        pct_claims = re.findall(r'\b(\d+(?:\.\d+)?)\s*%(?!\w)', body)
+        allowed_percentage_tokens = {
+            _normalize_numeric_token(value)
+            for value in allowed_percentages | allowed_nums
+        }
         for pct in pct_claims:
-            clean_pct = pct.rstrip(".0") if pct.endswith(".0") else pct
-            if clean_pct not in allowed_percentages and pct not in allowed_nums and clean_pct not in allowed_nums:
+            clean_pct = _normalize_numeric_token(pct)
+            if clean_pct not in allowed_percentage_tokens:
                 issues.append(f"Ungrounded percentage claim: {pct}%")
 
         # ── 1. Currency amounts (must be in allowed_prices or allowed_numbers) ─────
@@ -216,6 +229,46 @@ class FactRegistry:
         for pattern in ACTION_CLAIM_PATTERNS:
             if re.search(pattern, body, re.IGNORECASE):
                 issues.append(f"Unverifiable action claim detected (pattern: {pattern[:50]}…)")
+
+        # ── 8. Unverifiable outcome promises ────────────────────────────────
+        OUTCOME_PROMISE_PATTERNS = [
+            r"\btop of (?:the )?(?:member |search |customer )?feeds?\b",
+            r"\b#\s?1\s*(?:spot|position|ranking|result)\b",
+            r"\bguarantee(?:d|s|ing)?\b",
+            r"\bwill\s+(?:be seen by|double|triple|10x)\b",
+            r"\bwill\s+reach\s+(?:more|a wider|a broader|at least|\d+)\b",
+            r"\b(?:boost|raise|improve|increase)\s+(?:your\s+)?(?:ranking|visibility|reach)\s+(?:instantly|immediately|overnight|to the top)\b",
+        ]
+        for pattern in OUTCOME_PROMISE_PATTERNS:
+            for match in re.finditer(pattern, body, re.IGNORECASE):
+                if "guarantee" in pattern:
+                    prefix = body[max(0, match.start() - 24):match.start()]
+                    if re.search(
+                        r"\b(?:not|never|no|cannot|can't|won't|don't|doesn't|will not|do not|does not)\s+(?:be\s+)?$",
+                        prefix,
+                        re.IGNORECASE
+                    ):
+                        continue
+                issues.append(f"Unverifiable outcome promise detected (pattern: {pattern[:50]}…)")
+
+        # ── 9. Unsupported trend/demand descriptors ─────────────────────────
+        TREND_PATTERNS = [
+            r"\bsurg(?:e|es|ed|ing)\b",
+            r"\bbooming\b",
+            r"\bskyrocketing\b",
+            r"\bexploding\b",
+            r"\btrending up\b",
+            r"\bpicking up rapidly\b",
+            r"\bin high demand right now\b",
+        ]
+        if any(re.search(pattern, body, re.IGNORECASE) for pattern in TREND_PATTERNS):
+            grounded_percentages = allowed_percentage_tokens
+            has_grounded_percentage = any(
+                _normalize_numeric_token(pct) in grounded_percentages
+                for pct in pct_claims
+            )
+            if not has_grounded_percentage:
+                issues.append("Unsupported trend/demand claim without a grounded percentage")
 
         return len(issues) == 0, issues
 

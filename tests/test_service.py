@@ -176,6 +176,7 @@ def test_tick_composes_all_eligible_triggers():
 
 @pytest.mark.asyncio
 async def test_gemini_retries_once_on_transient_server_error(monkeypatch):
+    import asyncio
     import httpx
 
     class FakeResponse:
@@ -207,6 +208,11 @@ async def test_gemini_retries_once_on_transient_server_error(monkeypatch):
             })
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    sleep_calls = []
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr("vera.llm_client._backoff_with_jitter", lambda attempt: 0.2)
     client = LLMClient()
     client.provider = "gemini"
     client.api_key = "test-key"
@@ -216,15 +222,18 @@ async def test_gemini_retries_once_on_transient_server_error(monkeypatch):
 
     assert result == '{"body":"ready"}'
     assert FakeAsyncClient.requests == 2
+    assert sleep_calls == [0.2]
 
 @pytest.mark.asyncio
 async def test_gemini_rotates_model_on_quota_exhaustion(monkeypatch):
+    import asyncio
     import httpx
 
     class FakeResponse:
         def __init__(self, status_code, payload=None):
             self.status_code = status_code
             self.payload = payload or {}
+            self.headers = {"Retry-After": "0.75"} if status_code == 429 else {}
 
         def json(self):
             return self.payload
@@ -250,6 +259,10 @@ async def test_gemini_rotates_model_on_quota_exhaustion(monkeypatch):
             })
 
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    sleep_calls = []
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
     client = LLMClient()
     client.provider = "gemini"
     client.api_key = "test-key"
@@ -261,6 +274,30 @@ async def test_gemini_rotates_model_on_quota_exhaustion(monkeypatch):
     assert len(FakeAsyncClient.urls) == 2
     assert "/models/gemini-primary:" in FakeAsyncClient.urls[0]
     assert "/models/gemini-secondary:" in FakeAsyncClient.urls[1]
+    assert sleep_calls == [0.75]
+
+def test_retry_after_parser_handles_missing_and_invalid_headers():
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+    from vera.llm_client import _parse_retry_after
+
+    class ResponseWithoutHeaders:
+        pass
+
+    class ResponseWithHeaders:
+        headers = {"Retry-After": "not-a-delay"}
+
+    class ResponseWithHttpDate:
+        headers = {
+            "Retry-After": format_datetime(
+                datetime.now(timezone.utc) + timedelta(seconds=10), usegmt=True
+            )
+        }
+
+    assert _parse_retry_after(ResponseWithoutHeaders(), 2.0) == 0.0
+    assert _parse_retry_after(ResponseWithHeaders(), 2.0) == 0.0
+    assert _parse_retry_after(ResponseWithHeaders(), -1.0) == 0.0
+    assert _parse_retry_after(ResponseWithHttpDate(), 0.5) == 0.5
 
 def test_reply_intent_transition_and_hostile():
     # Acceptance transition to ACTION mode
@@ -415,6 +452,74 @@ def test_fact_grounding_allows_dates_in_category_digest_text():
 
     assert valid is True
     assert issues == []
+
+def test_fact_grounding_rejects_unverifiable_outcome_promise():
+    from vera.fact_registry import FactRegistry
+
+    facts = FactRegistry.extract_allowed_facts({
+        "merchant": {"name": "Zen Yoga Studio"},
+        "trigger": {"payload": {"delta_pct": 0.31}}
+    })
+    body = "Calls surged 31% this week, putting you back on top of member feeds."
+
+    valid, issues = FactRegistry.verify_grounding(body, facts)
+
+    assert valid is False
+    assert any("outcome promise" in issue.lower() for issue in issues)
+
+def test_fact_grounding_requires_a_grounded_stat_for_trend_claim():
+    from vera.fact_registry import FactRegistry
+
+    empty_facts = FactRegistry.extract_allowed_facts({
+        "merchant": {}, "category": {}, "trigger": {"payload": {}}
+    })
+    valid, issues = FactRegistry.verify_grounding(
+        "Local demand is surging ahead of Diwali.", empty_facts
+    )
+    assert valid is False
+    assert any("trend/demand" in issue.lower() for issue in issues)
+
+    unrelated_number_facts = FactRegistry.extract_allowed_facts({
+        "merchant": {}, "category": {}, "trigger": {"payload": {"days_until": 8}}
+    })
+    valid, issues = FactRegistry.verify_grounding(
+        "Local demand is surging in 2026.", unrelated_number_facts
+    )
+    assert valid is False
+    assert any("trend/demand" in issue.lower() for issue in issues)
+
+    grounded_facts = FactRegistry.extract_allowed_facts({
+        "merchant": {}, "category": {}, "trigger": {"payload": {"delta_pct": 0.42}}
+    })
+    valid, issues = FactRegistry.verify_grounding(
+        "Local searches are surging, up 42% this week.", grounded_facts
+    )
+    assert valid is True
+    assert issues == []
+
+    decimal_facts = FactRegistry.extract_allowed_facts({
+        "merchant": {}, "category": {}, "trigger": {"payload": {"delta_pct": 0.20}}
+    })
+    valid, issues = FactRegistry.verify_grounding(
+        "Local searches are surging, up 20.0% this week.", decimal_facts
+    )
+    assert valid is True
+    assert issues == []
+
+def test_outcome_grounding_does_not_flag_reach_out_language():
+    from vera.fact_registry import FactRegistry
+
+    facts = FactRegistry.extract_allowed_facts({"merchant": {}, "trigger": {"payload": {}}})
+    valid, issues = FactRegistry.verify_grounding("I'll reach out to three partners tomorrow.", facts)
+
+    assert valid is True
+    assert issues == []
+
+    disclaimer_valid, disclaimer_issues = FactRegistry.verify_grounding(
+        "We can't guarantee results, but I'll reach out with verified details.", facts
+    )
+    assert disclaimer_valid is True
+    assert disclaimer_issues == []
 
 def test_consent_revoked_trigger_blocked():
     """Trigger whose customer has revoked consent must produce zero actions."""

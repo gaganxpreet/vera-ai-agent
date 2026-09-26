@@ -1,10 +1,44 @@
+import asyncio
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import logging
+import random
 import time
 from typing import Dict, Any, Optional
 from vera.config import settings
 
 logger = logging.getLogger("vera.llm")
+
+def _parse_retry_after(response: Any, cap_seconds: float) -> float:
+    """Parse Retry-After seconds or HTTP-date, capped to the remaining budget."""
+    try:
+        headers = getattr(response, "headers", None)
+        if not headers:
+            return 0.0
+        value = next(
+            (header_value for name, header_value in headers.items()
+             if name.lower() == "retry-after"),
+            None
+        )
+        if value is None:
+            return 0.0
+        try:
+            delay = float(value)
+        except (TypeError, ValueError):
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+        return max(0.0, min(delay, max(0.0, cap_seconds)))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _backoff_with_jitter(attempt: int, base: float = 0.35, cap: float = 2.5) -> float:
+    delay = min(cap, base * (2 ** max(0, attempt)))
+    return random.uniform(delay * 0.5, delay)
+
 
 def _contextual_reply_rationale(projection: Dict[str, Any], default: str) -> str:
     trigger = projection.get("trigger", {})
@@ -553,7 +587,7 @@ class LLMClient:
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     deadline = time.monotonic() + 25.0
-                    for model in self.gemini_models:
+                    for model_index, model in enumerate(self.gemini_models):
                         model_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
                         move_to_next_model = False
                         for attempt in range(2):
@@ -577,7 +611,17 @@ class LLMClient:
                                 logger.warning(f"Gemini authentication/permission error (HTTP {resp.status_code})")
                                 return None
                             if resp.status_code == 429:
-                                logger.warning(f"Gemini quota exhausted for {model} — trying next model")
+                                remaining = deadline - time.monotonic()
+                                wait_cap = min(3.0, max(0.0, remaining - 0.5))
+                                wait = _parse_retry_after(resp, wait_cap)
+                                if wait <= 0:
+                                    wait = _backoff_with_jitter(model_index)
+                                wait = min(wait, max(0.0, remaining - 0.2))
+                                if wait > 0:
+                                    logger.warning(f"Gemini quota exhausted for {model} — backing off {wait:.2f}s before next model")
+                                    await asyncio.sleep(wait)
+                                else:
+                                    logger.warning(f"Gemini quota exhausted for {model} — trying next model")
                                 move_to_next_model = True
                                 break
                             if resp.status_code == 404:
@@ -585,7 +629,14 @@ class LLMClient:
                                 move_to_next_model = True
                                 break
                             if resp.status_code >= 500 and attempt == 0:
-                                logger.warning(f"Gemini HTTP {resp.status_code} for {model} — retrying once")
+                                remaining = deadline - time.monotonic()
+                                wait = min(
+                                    _backoff_with_jitter(attempt),
+                                    max(0.0, remaining - 0.2)
+                                )
+                                logger.warning(f"Gemini HTTP {resp.status_code} for {model} — retrying in {wait:.2f}s")
+                                if wait > 0:
+                                    await asyncio.sleep(wait)
                                 continue
                             if resp.status_code >= 500:
                                 logger.warning(f"Gemini HTTP {resp.status_code} for {model} — trying next model")
