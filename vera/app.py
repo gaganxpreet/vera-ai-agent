@@ -71,8 +71,7 @@ async def tick(req: TickRequest):
     # Trigger routing, expiry check against current timestamp, and priority ranking
     ranked_triggers = trigger_router.evaluate_triggers(req.available_triggers, now=req.now)
     
-    # Select high-confidence actionable triggers (top 1-2 to ensure low latency and high decision precision)
-    max_actions = 2
+    max_actions = 20
     actions: List[ProactiveAction] = []
     
     for item in ranked_triggers[:max_actions]:

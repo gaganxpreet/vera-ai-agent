@@ -96,6 +96,7 @@ class MessageComposer:
         State classification -> intent transition -> auto-reply check -> opt-out -> LLM (async) -> reply response
         """
         conv_state = conversation_store.get_or_create(conversation_id, merchant_id=merchant_id, customer_id=customer_id)
+        previous_vera_message = conv_state.last_bot_message
         
         # 0. Immediate guard: if conversation or participant is already opted out, cease all communication immediately
         if conv_state.opt_out or conv_state.status == "OPTED_OUT" or (conv_state.merchant_id and suppression_manager.is_opted_out(conv_state.merchant_id)):
@@ -165,11 +166,16 @@ class MessageComposer:
             original_trigger = context_store.get("trigger", conv_state.last_trigger_id)
 
         target_trigger = original_trigger or {"kind": "conversation_reply", "payload": {}}
-        projection = project_context_for_trigger(category, merchant, target_trigger, customer)
+        projection = project_context_for_trigger(
+            category, merchant, target_trigger, customer, include_reply_context=True
+        )
 
         recent_turns = [{"role": t.role, "message": t.message} for t in conv_state.turns[-4:]]
 
-        prompts = build_reply_prompt(inbound_message, inbound_intent, conv_state.mode, projection, recent_turns)
+        prompts = build_reply_prompt(
+            inbound_message, inbound_intent, conv_state.mode, projection, recent_turns,
+            previous_vera_message=previous_vera_message
+        )
         raw_res = await llm_client.areply_structured(
             projection,
             inbound_message,

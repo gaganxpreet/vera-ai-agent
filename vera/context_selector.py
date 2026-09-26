@@ -4,7 +4,8 @@ def project_context_for_trigger(
     category: Optional[Dict[str, Any]],
     merchant: Optional[Dict[str, Any]],
     trigger: Dict[str, Any],
-    customer: Optional[Dict[str, Any]] = None
+    customer: Optional[Dict[str, Any]] = None,
+    include_reply_context: bool = False
 ) -> Dict[str, Any]:
     """
     Minimizes context down to only the facts relevant to this trigger.
@@ -106,6 +107,15 @@ def project_context_for_trigger(
             "languages": ident.get("languages") or merchant.get("languages", ["en"])
         }
 
+        if include_reply_context:
+            projected_merchant.update({
+                "performance": merchant.get("performance", {}),
+                "active_offers": [o for o in merchant.get("offers", []) if o.get("status") == "active"],
+                "customer_aggregate": merchant.get("customer_aggregate", {}),
+                "signals": merchant.get("signals", []),
+                "conversation_history": merchant.get("conversation_history", [])[-4:]
+            })
+
         # Include performance/subscription strictly when relevant (no synthetic defaults)
         if "perf" in kind or kind in ["seasonal_acquisition_dip", "summer_demand_shift", "dormant_merchant", "dormant_with_vera"]:
             perf = merchant.get("performance", {})
@@ -168,6 +178,12 @@ def project_context_for_trigger(
             "slug": category.get("slug"),
             "voice": category.get("voice", {})
         }
+
+        if include_reply_context:
+            projected_category["peer_stats"] = category.get("peer_stats", {})
+        for field in ("peer_campaigns", "social_proof"):
+            if field in category:
+                projected_category[field] = category[field]
 
         # Only extract the targeted digest item if research/compliance
         top_item_id = t_payload.get("top_item_id")

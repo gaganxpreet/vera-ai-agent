@@ -1,9 +1,43 @@
 import json
 import logging
+import time
 from typing import Dict, Any, Optional
 from vera.config import settings
 
 logger = logging.getLogger("vera.llm")
+
+def _contextual_reply_rationale(projection: Dict[str, Any], default: str) -> str:
+    trigger = projection.get("trigger", {})
+    merchant = projection.get("merchant", {})
+    category = projection.get("category", {})
+    evidence = []
+
+    performance = merchant.get("performance", {})
+    ctr = performance.get("ctr")
+    peer_ctr = (category.get("peer_stats") or {}).get("avg_ctr")
+    if isinstance(ctr, (int, float)) and isinstance(peer_ctr, (int, float)):
+        evidence.append(
+            f"CTR {ctr:.1%} {'below' if ctr < peer_ctr else 'at or above'} peer median {peer_ctr:.1%}"
+        )
+
+    kind = trigger.get("kind")
+    if kind:
+        evidence.append(f"{kind.replace('_', ' ')} trigger")
+
+    digest_item = category.get("target_digest_item", {})
+    if digest_item.get("source"):
+        evidence.append(f"anchored on {digest_item['source']} citation")
+
+    signals = merchant.get("signals") or []
+    if "high_risk_adult_cohort" in signals:
+        evidence.append("relevant to the high-risk adult cohort")
+
+    history = merchant.get("conversation_history") or []
+    if history and history[-1].get("engagement"):
+        evidence.append(f"latest recorded engagement: {history[-1]['engagement']}")
+
+    return "; ".join(evidence) + "." if evidence else default
+
 
 def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = False, inbound_msg: str = "", intent: str = "") -> Dict[str, Any]:
     """
@@ -27,11 +61,31 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
                 if day in inbound_lower:
                     extra_param = f" for {day.title()}"
                     break
+            if kind == "research_digest":
+                digest_item = category.get("target_digest_item", {})
+                source = digest_item.get("source")
+                title = digest_item.get("title")
+                evidence = f"{source}: {title}" if source and title else title or source
+                body_text = (
+                    f"Great, {owner_name}. I'll pull the {evidence} summary and draft an education note for {merchant.get('name')}."
+                    if evidence else
+                    f"Great, {owner_name}. I'll prepare the research summary and education note for {merchant.get('name')}."
+                )
+            elif "perf" in kind and t_payload.get("delta_pct") is not None:
+                metric = t_payload.get("metric", "performance")
+                delta_value = t_payload["delta_pct"]
+                movement = "dropped" if delta_value < 0 else "increased"
+                delta = f"{abs(delta_value):.0%}"
+                body_text = f"Great, {owner_name}. I'll prepare the recovery plan for {merchant.get('name')}'s {metric}, which {movement} by {delta}."
+            else:
+                body_text = f"Great! Confirmed{extra_param} for {merchant.get('name')}. I'll proceed with the next step we discussed."
             return {
                 "action": "send",
-                "body": f"Great! Confirmed{extra_param} for {merchant.get('name')}. We'll proceed with activating the campaign options as discussed.",
+                "body": body_text,
                 "cta": "none",
-                "rationale": "Transitioned to action execution upon merchant acceptance."
+                "rationale": _contextual_reply_rationale(
+                    projection, "Merchant accepted; proceeding with the requested next step."
+                )
             }
         elif "gst" in inbound_lower or "tax" in inbound_lower:
             return {
@@ -471,6 +525,9 @@ class LLMClient:
         self.provider = settings.llm_provider.lower()
         if self.provider == "gemini":
             self.api_key = settings.gemini_api_key
+            self.gemini_models = list(dict.fromkeys(
+                [settings.gemini_model, *settings.gemini_fallback_models]
+            ))
         elif self.provider == "openai":
             self.api_key = settings.openai_api_key
         elif self.provider == "groq":
@@ -486,7 +543,6 @@ class LLMClient:
         import httpx
         try:
             if self.provider == "gemini":
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={self.api_key}"
                 body = {
                     "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
                     "generationConfig": {
@@ -496,16 +552,51 @@ class LLMClient:
                     }
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.post(url, json=body)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data["candidates"][0]["content"]["parts"][0]["text"]
-                    elif resp.status_code == 429:
-                        logger.warning("Gemini quota exhausted (HTTP 429) — using grounded fallback")
-                        return None
-                    else:
-                        logger.warning(f"Gemini HTTP {resp.status_code} — using grounded fallback")
-                        return None
+                    deadline = time.monotonic() + 25.0
+                    for model in self.gemini_models:
+                        model_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+                        move_to_next_model = False
+                        for attempt in range(2):
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                logger.warning("Gemini model fallback budget exhausted — using grounded fallback")
+                                return None
+                            try:
+                                resp = await client.post(
+                                    model_url, json=body, timeout=min(10.0, remaining)
+                                )
+                            except httpx.TimeoutException:
+                                logger.warning(f"Gemini request timed out for {model} — trying next model")
+                                move_to_next_model = True
+                                break
+
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                return data["candidates"][0]["content"]["parts"][0]["text"]
+                            if resp.status_code in (401, 403):
+                                logger.warning(f"Gemini authentication/permission error (HTTP {resp.status_code})")
+                                return None
+                            if resp.status_code == 429:
+                                logger.warning(f"Gemini quota exhausted for {model} — trying next model")
+                                move_to_next_model = True
+                                break
+                            if resp.status_code == 404:
+                                logger.warning(f"Gemini model {model} unavailable — trying next model")
+                                move_to_next_model = True
+                                break
+                            if resp.status_code >= 500 and attempt == 0:
+                                logger.warning(f"Gemini HTTP {resp.status_code} for {model} — retrying once")
+                                continue
+                            if resp.status_code >= 500:
+                                logger.warning(f"Gemini HTTP {resp.status_code} for {model} — trying next model")
+                                move_to_next_model = True
+                                break
+                            logger.warning(f"Gemini HTTP {resp.status_code} — using grounded fallback")
+                            return None
+                        if move_to_next_model:
+                            continue
+                    logger.warning("All configured Gemini models failed — using grounded fallback")
+                    return None
 
             elif self.provider in ["openai", "groq"]:
                 base_url = "https://api.openai.com/v1" if self.provider == "openai" else "https://api.groq.com/openai/v1"
@@ -552,16 +643,41 @@ class LLMClient:
         import httpx
         try:
             if self.provider == "gemini":
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={self.api_key}"
                 body = {
                     "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
                     "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1000}
                 }
                 with httpx.Client(timeout=10.0) as client:
-                    resp = client.post(url, json=body)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return data["candidates"][0]["content"]["parts"][0]["text"]
+                    deadline = time.monotonic() + 25.0
+                    for model in self.gemini_models:
+                        model_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+                        for attempt in range(2):
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                logger.warning("Gemini model fallback budget exhausted — using grounded fallback")
+                                return None
+                            resp = client.post(
+                                model_url, json=body, timeout=min(10.0, remaining)
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                return data["candidates"][0]["content"]["parts"][0]["text"]
+                            if resp.status_code in (401, 403):
+                                logger.warning(f"Gemini authentication/permission error (HTTP {resp.status_code})")
+                                return None
+                            if resp.status_code in (404, 429):
+                                logger.warning(f"Gemini model/quota unavailable for {model} — trying next model")
+                                break
+                            if resp.status_code >= 500 and attempt == 0:
+                                logger.warning(f"Gemini HTTP {resp.status_code} for {model} — retrying once")
+                                continue
+                            if resp.status_code >= 500:
+                                logger.warning(f"Gemini HTTP {resp.status_code} for {model} — trying next model")
+                                break
+                            logger.warning(f"Gemini HTTP {resp.status_code} — using grounded fallback")
+                            return None
+                    logger.warning("All configured Gemini models failed — using grounded fallback")
+                    return None
 
             elif self.provider in ["openai", "groq"]:
                 base_url = "https://api.openai.com/v1" if self.provider == "openai" else "https://api.groq.com/openai/v1"

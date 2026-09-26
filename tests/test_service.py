@@ -3,12 +3,14 @@ from fastapi.testclient import TestClient
 from vera.app import app
 from vera.context_store import context_store
 from vera.conversation_state import conversation_store
+from vera.llm_client import LLMClient, llm_client
 from vera.suppression import suppression_manager
 
 client = TestClient(app)
 
 @pytest.fixture(autouse=True)
-def clean_state():
+def clean_state(monkeypatch):
+    monkeypatch.setattr(llm_client, "api_key", None)
     context_store.clear()
     conversation_store.clear()
     suppression_manager.clear()
@@ -138,6 +140,122 @@ def test_tick_and_suppression():
     })
     assert tick2.status_code == 200
     assert len(tick2.json()["actions"]) == 0
+
+def test_tick_composes_all_eligible_triggers():
+    client.post("/v1/context", json={
+        "scope": "category", "context_id": "salons", "version": 1,
+        "payload": {"slug": "salons"}
+    })
+    client.post("/v1/context", json={
+        "scope": "merchant", "context_id": "m_multi", "version": 1,
+        "payload": {"merchant_id": "m_multi", "name": "Studio Multi", "category_slug": "salons"}
+    })
+    trigger_ids = [f"trg_multi_{index}" for index in range(1, 22)]
+    for trigger_id in trigger_ids:
+        client.post("/v1/context", json={
+            "scope": "trigger", "context_id": trigger_id, "version": 1,
+            "payload": {
+                "id": trigger_id, "kind": "curious_ask_due", "scope": "merchant",
+                "merchant_id": "m_multi", "payload": {}
+            }
+        })
+
+    response = client.post("/v1/tick", json={
+        "now": "2026-04-26T10:00:00Z", "available_triggers": trigger_ids
+    })
+
+    assert response.status_code == 200
+    actions = response.json()["actions"]
+    assert len(actions) == 20
+    assert {action["trigger_id"] for action in actions} == set(trigger_ids[:20])
+
+@pytest.mark.asyncio
+async def test_gemini_retries_once_on_transient_server_error(monkeypatch):
+    import httpx
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.payload = payload or {}
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        requests = 0
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, json, **kwargs):
+            type(self).requests += 1
+            if type(self).requests == 1:
+                return FakeResponse(503)
+            return FakeResponse(200, {
+                "candidates": [{"content": {"parts": [{"text": '{"body":"ready"}'}]}}]
+            })
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = LLMClient()
+    client.provider = "gemini"
+    client.api_key = "test-key"
+    client.gemini_models = ["gemini-primary", "gemini-secondary"]
+
+    result = await client.acomplete("system", "user")
+
+    assert result == '{"body":"ready"}'
+    assert FakeAsyncClient.requests == 2
+
+@pytest.mark.asyncio
+async def test_gemini_rotates_model_on_quota_exhaustion(monkeypatch):
+    import httpx
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.payload = payload or {}
+
+        def json(self):
+            return self.payload
+
+    class FakeAsyncClient:
+        urls = []
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, json, **kwargs):
+            type(self).urls.append(url)
+            if len(type(self).urls) == 1:
+                return FakeResponse(429)
+            return FakeResponse(200, {
+                "candidates": [{"content": {"parts": [{"text": '{"body":"ready"}'}]}}]
+            })
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+    client = LLMClient()
+    client.provider = "gemini"
+    client.api_key = "test-key"
+    client.gemini_models = ["gemini-primary", "gemini-secondary"]
+
+    result = await client.acomplete("system", "user")
+
+    assert result == '{"body":"ready"}'
+    assert len(FakeAsyncClient.urls) == 2
+    assert "/models/gemini-primary:" in FakeAsyncClient.urls[0]
+    assert "/models/gemini-secondary:" in FakeAsyncClient.urls[1]
 
 def test_reply_intent_transition_and_hostile():
     # Acceptance transition to ACTION mode
@@ -472,6 +590,69 @@ def test_reply_prompt_includes_context_projection():
     assert "Context Projection" in prompts["user"]
     assert "leads" in prompts["user"]
     assert "40%" in prompts["user"] or "-0.4" in prompts["user"]
+
+def test_reply_uses_merchant_context_and_hinglish_prompt():
+    from vera.context_selector import project_context_for_trigger
+    from vera.llm_client import _generate_grounded_fallback
+    from vera.prompt_builder import build_composition_prompt, build_reply_prompt
+    from vera.strategies import STRATEGY_REGISTRY
+    from vera.validator import output_validator
+
+    merchant = {
+        "merchant_id": "m_meera", "category_slug": "dentists",
+        "identity": {
+            "name": "Dr. Meera's Clinic", "owner_first_name": "Meera",
+            "locality": "Lajpat Nagar", "languages": ["en", "hi"]
+        },
+        "performance": {"ctr": 0.021},
+        "offers": [{"title": "Dental Cleaning @ ₹299", "status": "active"}],
+        "signals": ["high_risk_adult_cohort"],
+        "conversation_history": [{"engagement": "merchant_replied"}]
+    }
+    category = {
+        "slug": "dentists", "voice": {"tone": "peer_clinical"},
+        "peer_stats": {"avg_ctr": 0.030},
+        "peer_campaigns": [{"count": 3, "category": "dentists", "locality": "Lajpat Nagar", "type": "recall", "period": "this month"}],
+        "digest": [{"id": "d_jida", "title": "Fluoride recall findings", "source": "JIDA Oct 2026"}]
+    }
+    trigger = {
+        "id": "trg_research", "kind": "research_digest", "scope": "merchant",
+        "payload": {"top_item_id": "d_jida", "category": "dentists"}
+    }
+    projection = project_context_for_trigger(
+        category, merchant, trigger, include_reply_context=True
+    )
+
+    composition = build_composition_prompt(
+        projection, STRATEGY_REGISTRY["research_digest"]
+    )
+    reply = build_reply_prompt(
+        "Yes, please", "ACCEPTANCE", "ACTION", projection, [],
+        previous_vera_message="I can share the JIDA summary."
+    )
+    fallback = _generate_grounded_fallback(
+        projection, is_reply=True, inbound_msg="Yes, please", intent="ACCEPTANCE"
+    )
+
+    assert projection["merchant"]["performance"]["ctr"] == 0.021
+    assert projection["merchant"]["active_offers"][0]["title"] == "Dental Cleaning @ ₹299"
+    assert "mix Hindi and English" in composition["system"]
+    assert "3 dentists in Lajpat Nagar" in composition["system"]
+    assert '"count": 3' in composition["user"]
+    assert "peer_clinical" in reply["system"]
+    assert "I can share the JIDA summary." in reply["user"]
+    assert "JIDA Oct 2026" in fallback["body"]
+    assert "CTR 2.1% below peer median 3.0%" in fallback["rationale"]
+    assert "high-risk adult cohort" in fallback["rationale"]
+
+    validated = output_validator.validate_and_repair_reply(
+        {
+            "action": "send", "body": "I'll prepare the requested summary.",
+            "cta": "none", "rationale": "Merchant accepted/confirmed as per ACCEPTANCE rules"
+        },
+        previous_body_hashes=[], projection=projection, inbound_message="Yes, please"
+    )
+    assert "CTR 2.1% below peer median 3.0%" in validated["rationale"]
 
 
 def test_semantic_type_grounding_rejects_mismatched_distance_claim():

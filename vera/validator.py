@@ -144,7 +144,17 @@ class OutputValidator:
             if not output.get("wait_seconds"):
                 output["wait_seconds"] = 14400 # 4 hours
         
-        if not output.get("rationale"):
+        rationale = str(output.get("rationale") or "")
+        weak_rationale_markers = (
+            "as per acceptance", "accepted/confirmed", "transitioned to action execution",
+            "maintain thread continuity"
+        )
+        if projection and (not rationale or any(marker in rationale.lower() for marker in weak_rationale_markers)):
+            from vera.llm_client import _contextual_reply_rationale
+            output["rationale"] = _contextual_reply_rationale(
+                projection, rationale or f"Replied with action {action} to maintain thread continuity."
+            )
+        elif not rationale:
             output["rationale"] = f"Replied with action {action} to maintain thread continuity."
 
         return output

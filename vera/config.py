@@ -1,5 +1,8 @@
 import os
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+load_dotenv()
 
 class Settings(BaseModel):
     bot_host: str = Field(default_factory=lambda: os.getenv("BOT_HOST", "0.0.0.0"))
@@ -10,6 +13,14 @@ class Settings(BaseModel):
     llm_provider: str = Field(default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini"))
     gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")))
     gemini_model: str = Field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
+    gemini_fallback_models: list[str] = Field(default_factory=lambda: [
+        model.strip()
+        for model in os.getenv(
+            "GEMINI_FALLBACK_MODELS",
+            "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+        ).split(",")
+        if model.strip()
+    ])
     
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     openai_model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))

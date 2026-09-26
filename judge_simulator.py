@@ -20,6 +20,9 @@ Author: magicpin AI Challenge Team
 # ██████  CONFIGURATION - EDIT THIS SECTION ██████
 # =============================================================================
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Your bot's URL (where your bot is running)
 BOT_URL = os.environ.get("BOT_URL", "http://localhost:8080")
@@ -31,7 +34,7 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mock")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", os.environ.get("GEMINI_API_KEY", os.environ.get("OPENAI_API_KEY", "")))
 
 # Model to use (leave empty for default, or specify like "gpt-4o", "claude-3-5-sonnet-20241022", etc.)
-LLM_MODEL = os.environ.get("LLM_MODEL", "")
+LLM_MODEL = os.environ.get("LLM_MODEL", os.environ.get("GEMINI_MODEL", ""))
 
 # For Ollama only: local server URL
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
