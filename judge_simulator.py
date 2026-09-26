@@ -20,6 +20,14 @@ Author: magicpin AI Challenge Team
 # ██████  CONFIGURATION - EDIT THIS SECTION ██████
 # =============================================================================
 import os
+GEMINI_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.environ.get(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    ).split(",")
+    if model.strip()
+]
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -58,15 +66,19 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from urllib import request as urlrequest, error as urlerror
 from abc import ABC, abstractmethod
+from email.utils import parsedate_to_datetime
+import random
 
 # Constants
 TIMEOUT_LLM = 45
+GEMINI_TOTAL_TIMEOUT = 25.0
+GEMINI_BACKOFF_CAP = 2.5
 DATASET_DIR = Path(__file__).parent / "dataset"
 
 # =============================================================================
@@ -217,12 +229,38 @@ class AnthropicProvider(LLMProvider):
 
 
 class GeminiProvider(LLMProvider):
-    def __init__(self, api_key: str, model: str = ""):
+    def __init__(self, api_key: str, model: str = "", fallback_models: Optional[List[str]] = None):
         self.api_key = api_key
         self.model = model or "gemini-1.5-flash"
+        fallbacks = GEMINI_FALLBACK_MODELS if fallback_models is None else fallback_models
+        self.models = list(dict.fromkeys([self.model, *fallbacks]))
 
     def name(self) -> str:
-        return f"Gemini ({self.model})"
+        fallbacks = ", ".join(self.models[1:])
+        suffix = f"; fallbacks: {fallbacks}" if fallbacks else ""
+        return f"Gemini ({self.model}{suffix})"
+
+    @staticmethod
+    def _retry_delay(error: urlerror.HTTPError, attempt: int, remaining: float) -> float:
+        cap = min(GEMINI_BACKOFF_CAP, max(0.0, remaining - 0.2))
+        headers = getattr(error, "headers", None) or getattr(error, "hdrs", None)
+        retry_after = headers.get("Retry-After") if headers else None
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except (TypeError, ValueError):
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    delay = -1
+            if delay >= 0:
+                return min(delay, cap)
+
+        base = min(GEMINI_BACKOFF_CAP, 0.35 * (2 ** max(0, attempt)))
+        return random.uniform(base * 0.5, min(base, cap)) if cap > 0 else 0.0
 
     def complete(self, prompt: str, system: str = None) -> str:
         full_prompt = f"{system}\n\n{prompt}" if system else prompt
@@ -231,11 +269,33 @@ class GeminiProvider(LLMProvider):
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1500}
         }).encode("utf-8")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"})
-        resp = urlrequest.urlopen(req, timeout=TIMEOUT_LLM)
-        data = json.loads(resp.read().decode("utf-8"))
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        deadline = time.monotonic() + GEMINI_TOTAL_TIMEOUT
+        last_error = None
+        for model in self.models:
+            for attempt in range(2):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+                req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"})
+                try:
+                    resp = urlrequest.urlopen(req, timeout=min(TIMEOUT_LLM, remaining))
+                    data = json.loads(resp.read().decode("utf-8"))
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                except urlerror.HTTPError as error:
+                    if error.code not in (404, 429) and not 500 <= error.code < 600:
+                        raise
+                    last_error = error
+                    remaining = deadline - time.monotonic()
+                    delay = self._retry_delay(error, attempt, remaining)
+                    if delay > 0:
+                        time.sleep(delay)
+                    if error.code == 404 or error.code == 429 or attempt == 1:
+                        break
+
+        if last_error:
+            raise last_error
+        raise TimeoutError("Gemini fallback chain exceeded its 25-second budget")
 
 
 class DeepSeekProvider(LLMProvider):

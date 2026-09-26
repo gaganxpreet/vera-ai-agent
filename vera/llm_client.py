@@ -304,23 +304,46 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         fest = t_payload.get("festival")
         days = t_payload.get("days_until")
         days_phrase = f" in {days} days" if days is not None else ""
-        loc = merchant.get("locality")
-        loc_phrase = f" across {loc}" if loc else ""
+        fest_param = fest or "Seasonal Demand"
 
-        if fest:
-            body_text = f"Hi {owner_name}, {fest} is coming up{days_phrase}! Festive demand{loc_phrase} picks up for bookings and services. Want me to draft a {fest} promotion for {merchant.get('name')} to publish across Google & WhatsApp?"
-            fest_param = fest
+        if not fest:
+            merchant_name = merchant.get("name") or "your business"
+            locality = merchant.get("locality")
+            location_phrase = f" in {locality}" if locality else ""
+            category_name = {
+                "gyms": "gym",
+                "salons": "salon",
+                "restaurants": "restaurant",
+                "dentists": "dental",
+                "pharmacies": "pharmacy"
+            }.get(category.get("slug"), "business")
+            body_text = (
+                f"Hi {owner_name}, I don't have a festival name or date for {merchant_name}{location_phrase}. "
+                f"Which upcoming occasion should I use to sketch a {category_name} campaign idea?"
+            )
+            rationale = "Asked which event to plan around, anchored on the supplied merchant, locality, and category without assuming timing or demand."
+        elif isinstance(days, (int, float)) and days > 30:
+            body_text = (
+                f"Hi {owner_name}, {fest} is {days} days away. "
+                f"It's early to launch a promotion, but we can plan ahead. "
+                f"Which service would you most like to feature?"
+            )
+            rationale = "Long-horizon festival trigger deprioritized into low-pressure early planning; no launch or demand claim made."
         else:
-            body_text = f"Hi {owner_name}, peak seasonal demand is approaching{loc_phrase}. Want me to draft a seasonal promotion for {merchant.get('name')} to publish across Google & WhatsApp?"
-            fest_param = "Seasonal Demand"
+            days_phrase = f" in {days} days" if isinstance(days, (int, float)) else ""
+            body_text = (
+                f"Hi {owner_name}, {fest} is coming up{days_phrase}. "
+                f"Would you like a short campaign idea for {merchant.get('name')}?"
+            )
+            rationale = "Uses the supplied near-term festival and offers one grounded campaign-planning next step."
 
         return {
             "body": body_text,
-            "cta": "binary_yes_no",
+            "cta": "open_ended" if not fest or (isinstance(days, (int, float)) and days > 30) else "binary_yes_no",
             "template_name": "vera_festival_campaign_v1",
             "template_params": [owner_name, fest_param, str(days or "soon")],
             "send_as": "vera",
-            "rationale": "Leverages upcoming festive timeline with proactive offer to draft promotional campaign."
+            "rationale": rationale
         }
 
     elif kind == "wedding_package_followup":

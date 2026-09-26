@@ -154,6 +154,12 @@ class TriggerRouter:
                 actionability_score = 2 # Placeholder trigger without concrete facts
 
             total_priority = urgency_score + impact_score + freshness_score + actionability_score
+            if kind == "festival_upcoming":
+                days_until = payload.get("days_until")
+                if isinstance(days_until, (int, float)) and days_until > 30:
+                    total_priority -= min(30, int((days_until - 30) / 5))
+                elif not payload.get("festival"):
+                    total_priority -= 15
 
             valid_candidates.append({
                 "trigger_id": tid,

@@ -1,5 +1,5 @@
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 @dataclass
 class TriggerStrategy:
@@ -190,7 +190,24 @@ def get_strategy_for_kind(
     Resolves known triggers via registry, and dynamically derives strategy for unknown triggers.
     """
     if kind in STRATEGY_REGISTRY:
-        return STRATEGY_REGISTRY[kind]
+        strategy = STRATEGY_REGISTRY[kind]
+        payload = (trigger or {}).get("payload", {})
+        days_until = payload.get("days_until")
+        if kind == "festival_upcoming" and isinstance(days_until, (int, float)) and days_until > 30:
+            return replace(
+                strategy,
+                cta_type="open_ended",
+                primary_goal="Invite low-pressure early festival planning; do not ask to launch or publish a campaign this far ahead",
+                compulsion_lever="curiosity"
+            )
+        if kind == "festival_upcoming" and not payload.get("festival"):
+            return replace(
+                strategy,
+                cta_type="open_ended",
+                primary_goal="Ask which upcoming occasion the merchant wants to plan for; do not infer a festival, date, or demand trend",
+                compulsion_lever="curiosity"
+            )
+        return strategy
 
     t_dict = trigger or {"kind": kind, "scope": scope}
     return derive_strategy_from_trigger(t_dict, category, merchant)

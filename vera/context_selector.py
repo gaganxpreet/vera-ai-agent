@@ -26,30 +26,36 @@ def project_context_for_trigger(
         # Milestones
         "milestone_reached":        ["metric", "milestone_value", "value_now", "count", "review_count"],
         # Seasonal / event
-        "festival_upcoming":        ["festival", "days_until"],
-        "ipl_match_tonight":        ["match", "festival", "venue"],
+        "festival_upcoming":        ["festival", "days_until", "date", "category_relevance", "metric_or_topic"],
+        "ipl_match_tonight":        ["match", "festival", "venue", "city", "match_time_iso", "is_weeknight"],
+        "ipl_match_today":          ["match", "festival", "venue", "city", "match_time_iso", "is_weeknight"],
+        # Planning and event opportunities
+        "active_planning_intent":   ["intent_topic", "program_title", "merchant_last_message"],
+        "category_seasonal":        ["season", "shelf_action_recommended", "trends"],
+        "cde_opportunity":          ["event_title", "date_iso", "days_until", "digest_item_id", "credits", "fee"],
         # Research / compliance
         "research_digest":          ["top_item_id", "category"],
         "regulation_change":        ["top_item_id", "category", "deadline_iso"],
         # Competition
-        "competitor_opened":        ["competitor", "distance_km"],
+        "competitor_opened":        ["competitor", "competitor_name", "distance_km", "opened_date", "their_offer", "metric_or_topic"],
         # Subscription
         "renewal_due":              ["plan", "days_remaining", "renewal_amount"],
         # Medication / refill
         "refill_due":               ["molecule_list", "last_refill", "stock_runs_out_iso"],
-        "chronic_refill_due":       ["molecule_list", "last_refill", "deadline_iso", "days_until"],
+        "chronic_refill_due":       ["molecule_list", "last_refill", "deadline_iso", "days_until", "delivery_address_saved", "metric_or_topic"],
         # Health recall / appointment
         "recall_due":               ["recall_reason", "available_slots", "slot_time", "next_session_options"],
-        "appointment_tomorrow":     ["slot_time", "next_session_options", "available_slots", "days_until"],
+        "appointment_tomorrow":     ["slot_time", "next_session_options", "available_slots", "days_until", "metric_or_topic"],
         # Customer reactivation
         "customer_winback":         ["last_visit_days", "visit_count"],
         "lapsed_customer":          ["last_visit_days", "visit_count"],
-        "customer_lapsed_soft":     ["last_visit_days", "visit_count"],
+        "customer_lapsed_soft":     ["last_visit_days", "visit_count", "metric_or_topic"],
+        "customer_lapsed_hard":     ["days_since_last_visit", "previous_focus", "previous_membership_months"],
         # Wedding / bridal
-        "wedding_package_followup": ["days_to_wedding", "program_title"],
+        "wedding_package_followup": ["days_to_wedding", "program_title", "wedding_date", "trial_completed", "next_step_window_open"],
         # Engagement / program
-        "curious_ask_due":          [],
-        "trial_followup":           ["trial_n", "program_title", "days_since_trial"],
+        "curious_ask_due":          ["ask_template", "last_ask_at", "metric_or_topic"],
+        "trial_followup":           ["trial_n", "program_title", "days_since_trial", "trial_date", "next_session_options", "metric_or_topic"],
         "kids_yoga_trial_followup": ["trial_n", "program_title", "days_since_trial"],
         # Program planning
         "corporate_planning":       ["intent_topic", "program_title", "days_until"],
@@ -57,14 +63,18 @@ def project_context_for_trigger(
         # Dormancy / listing
         "scheduled_recurring":      [],
         "dormant_merchant":         ["dormant_days"],
-        "dormant_with_vera":        ["dormant_days", "last_active_iso"],
+        "dormant_with_vera":        ["dormant_days", "last_active_iso", "days_since_last_merchant_message", "last_topic", "metric_or_topic"],
         "unverified_listing":       ["platform", "gbp_status"],
+        "gbp_unverified":           ["platform", "gbp_status", "verified", "verification_path", "estimated_uplift_pct"],
         # Reviews
-        "review_theme_emerged":     ["theme", "sentiment", "sample_count"],
-        "review_theme_late_delivery": ["theme", "sentiment", "sample_count"],
+        "review_theme_emerged":     ["theme", "sentiment", "sample_count", "common_quote", "occurrences_30d", "trend", "metric_or_topic"],
+        "review_theme_late_delivery": ["theme", "sentiment", "sample_count", "common_quote", "occurrences_30d", "trend", "metric_or_topic"],
         # Seasonal demand
         "seasonal_acquisition_dip": ["metric", "delta_pct", "window", "season"],
+        "seasonal_perf_dip":        ["metric", "delta_pct", "window", "season", "season_note", "is_expected_seasonal"],
         "summer_demand_shift":      ["metric", "delta_pct", "window", "season"],
+        "supply_alert":             ["affected_batches", "alert_id", "manufacturer", "molecule"],
+        "winback_eligible":         ["days_since_expiry", "perf_dip_pct", "lapsed_customers_added_since_expiry"],
         # Webinar / CDE
         "cde_webinar":              ["event_title", "date_iso", "days_until"],
     }

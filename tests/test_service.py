@@ -174,6 +174,177 @@ def test_tick_composes_all_eligible_triggers():
     assert len(actions) == 20
     assert {action["trigger_id"] for action in actions} == set(trigger_ids[:20])
 
+def test_distant_festival_uses_early_planning_strategy_and_fallback():
+    from vera.llm_client import _generate_grounded_fallback
+    from vera.strategies import get_strategy_for_kind
+
+    far_trigger = {
+        "id": "trg_far_diwali", "kind": "festival_upcoming", "scope": "merchant",
+        "urgency": 1, "payload": {"festival": "Diwali", "days_until": 188}
+    }
+    near_trigger = {
+        "id": "trg_near_diwali", "kind": "festival_upcoming", "scope": "merchant",
+        "urgency": 4, "payload": {"festival": "Diwali", "days_until": 8}
+    }
+    merchant = {"name": "Studio Eleven", "owner_first_name": "Riya", "locality": "Banjara Hills"}
+    far_strategy = get_strategy_for_kind("festival_upcoming", trigger=far_trigger)
+    near_strategy = get_strategy_for_kind("festival_upcoming", trigger=near_trigger)
+    fallback = _generate_grounded_fallback({
+        "trigger": far_trigger,
+        "merchant": merchant,
+        "category": {"slug": "salons"}
+    })
+
+    assert far_strategy.cta_type == "open_ended"
+    assert "early festival planning" in far_strategy.primary_goal
+    assert near_strategy.cta_type == "binary_yes_no"
+    assert fallback["cta"] == "open_ended"
+    assert "188 days away" in fallback["body"]
+    assert "Which service" in fallback["body"]
+    assert "draft a" not in fallback["body"].lower()
+    assert "demand" not in fallback["body"].lower()
+
+    missing_event_strategy = get_strategy_for_kind(
+        "festival_upcoming",
+        trigger={"kind": "festival_upcoming", "scope": "merchant", "payload": {"metric_or_topic": "festival_upcoming"}}
+    )
+    missing_event_fallback = _generate_grounded_fallback({
+        "trigger": {"kind": "festival_upcoming", "payload": {}},
+        "merchant": merchant,
+        "category": {"slug": "salons"}
+    })
+    assert missing_event_strategy.cta_type == "open_ended"
+    assert missing_event_fallback["cta"] == "open_ended"
+    assert "festival name or date" in missing_event_fallback["body"]
+    assert "demand" not in missing_event_fallback["body"].lower()
+
+def test_distant_festival_is_deprioritized_against_urgent_trigger():
+    client.post("/v1/context", json={
+        "scope": "category", "context_id": "salons", "version": 1,
+        "payload": {"slug": "salons"}
+    })
+    client.post("/v1/context", json={
+        "scope": "merchant", "context_id": "m_festival_rank", "version": 1,
+        "payload": {"merchant_id": "m_festival_rank", "name": "Studio Eleven", "category_slug": "salons"}
+    })
+    client.post("/v1/context", json={
+        "scope": "trigger", "context_id": "trg_far_rank", "version": 1,
+        "payload": {
+            "id": "trg_far_rank", "kind": "festival_upcoming", "scope": "merchant",
+            "merchant_id": "m_festival_rank", "urgency": 1,
+            "expires_at": "2026-12-01T00:00:00Z",
+            "payload": {"festival": "Diwali", "days_until": 188}
+        }
+    })
+    client.post("/v1/context", json={
+        "scope": "trigger", "context_id": "trg_urgent_rank", "version": 1,
+        "payload": {
+            "id": "trg_urgent_rank", "kind": "regulation_change", "scope": "merchant",
+            "merchant_id": "m_festival_rank", "urgency": 4,
+            "payload": {"deadline_iso": "2026-05-01"}
+        }
+    })
+
+    from vera.trigger_router import trigger_router
+    ranked = trigger_router.evaluate_triggers(
+        ["trg_far_rank", "trg_urgent_rank"], now="2026-04-29T10:00:00Z"
+    )
+
+    assert [item["trigger_id"] for item in ranked] == ["trg_urgent_rank", "trg_far_rank"]
+
+def test_distant_festival_tick_uses_early_planning_message():
+    client.post("/v1/context", json={
+        "scope": "category", "context_id": "salons", "version": 1,
+        "payload": {"slug": "salons", "voice": {"tone": "warm_practical"}}
+    })
+    client.post("/v1/context", json={
+        "scope": "merchant", "context_id": "m_far_festival", "version": 1,
+        "payload": {
+            "merchant_id": "m_far_festival", "category_slug": "salons",
+            "identity": {"name": "Studio Eleven", "owner_first_name": "Riya", "locality": "Banjara Hills"}
+        }
+    })
+    client.post("/v1/context", json={
+        "scope": "trigger", "context_id": "trg_far_festival", "version": 1,
+        "payload": {
+            "id": "trg_far_festival", "kind": "festival_upcoming", "scope": "merchant",
+            "merchant_id": "m_far_festival", "urgency": 1,
+            "expires_at": "2026-12-01T00:00:00Z",
+            "payload": {"festival": "Diwali", "days_until": 188}
+        }
+    })
+
+    response = client.post("/v1/tick", json={
+        "now": "2026-04-26T10:00:00Z",
+        "available_triggers": ["trg_far_festival"]
+    })
+
+    assert response.status_code == 200
+    actions = response.json()["actions"]
+    assert len(actions) == 1
+    assert actions[0]["cta"] == "open_ended"
+    assert "188 days away" in actions[0]["body"]
+    assert "which service" in actions[0]["body"].lower()
+    assert "draft a" not in actions[0]["body"].lower()
+    assert "demand" not in actions[0]["body"].lower()
+
+def test_festival_placeholder_tick_asks_for_missing_event():
+    client.post("/v1/context", json={
+        "scope": "category", "context_id": "gyms", "version": 1,
+        "payload": {"slug": "gyms"}
+    })
+    client.post("/v1/context", json={
+        "scope": "merchant", "context_id": "m_festival_placeholder", "version": 1,
+        "payload": {
+            "merchant_id": "m_festival_placeholder", "category_slug": "gyms",
+            "identity": {"name": "Bend & Burn", "owner_first_name": "Pooja", "locality": "Koramangala"}
+        }
+    })
+    client.post("/v1/context", json={
+        "scope": "trigger", "context_id": "trg_festival_placeholder", "version": 1,
+        "payload": {
+            "id": "trg_festival_placeholder", "kind": "festival_upcoming", "scope": "merchant",
+            "merchant_id": "m_festival_placeholder", "urgency": 1,
+            "expires_at": "2026-12-01T00:00:00Z",
+            "payload": {"placeholder": True, "metric_or_topic": "festival_upcoming"}
+        }
+    })
+
+    response = client.post("/v1/tick", json={
+        "now": "2026-04-26T10:00:00Z",
+        "available_triggers": ["trg_festival_placeholder"]
+    })
+
+    assert response.status_code == 200
+    action = response.json()["actions"][0]
+    assert action["cta"] == "open_ended"
+    assert "Bend & Burn" in action["body"]
+    assert "Koramangala" in action["body"]
+    assert "gym campaign idea" in action["body"]
+    assert "demand" not in action["body"].lower()
+    assert "draft" not in action["body"].lower()
+
+def test_ipl_match_today_uses_explicit_payload_allowlist():
+    from vera.context_selector import project_context_for_trigger
+
+    projection = project_context_for_trigger(
+        {"slug": "restaurants"},
+        {"merchant_id": "m_pizza", "category_slug": "restaurants"},
+        {
+            "id": "trg_ipl_today", "kind": "ipl_match_today", "scope": "merchant",
+            "payload": {
+                "match": "DC vs MI", "venue": "Arun Jaitley Stadium", "city": "Delhi",
+                "match_time_iso": "2026-04-26T19:30:00+05:30", "is_weeknight": False,
+                "placeholder": "discard me"
+            }
+        }
+    )
+
+    assert projection["trigger"]["payload"] == {
+        "match": "DC vs MI", "venue": "Arun Jaitley Stadium", "city": "Delhi",
+        "match_time_iso": "2026-04-26T19:30:00+05:30", "is_weeknight": False
+    }
+
 @pytest.mark.asyncio
 async def test_gemini_retries_once_on_transient_server_error(monkeypatch):
     import asyncio
@@ -298,6 +469,44 @@ def test_retry_after_parser_handles_missing_and_invalid_headers():
     assert _parse_retry_after(ResponseWithHeaders(), 2.0) == 0.0
     assert _parse_retry_after(ResponseWithHeaders(), -1.0) == 0.0
     assert _parse_retry_after(ResponseWithHttpDate(), 0.5) == 0.5
+
+def test_judge_simulator_gemini_rotates_on_quota_exhaustion(monkeypatch):
+    from email.message import Message
+    import json
+    import judge_simulator
+
+    requests = []
+    sleeps = []
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps({
+                "candidates": [{"content": {"parts": [{"text": "ready"}]}}]
+            }).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        requests.append(request.full_url)
+        if len(requests) == 1:
+            headers = Message()
+            headers["Retry-After"] = "0.75"
+            raise judge_simulator.urlerror.HTTPError(
+                request.full_url, 429, "Too Many Requests", headers, None
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(judge_simulator.urlrequest, "urlopen", fake_urlopen)
+    monkeypatch.setattr(judge_simulator.time, "sleep", sleeps.append)
+    provider = judge_simulator.GeminiProvider(
+        "test-key", "gemini-primary", fallback_models=["gemini-secondary"]
+    )
+
+    response = provider.complete("Say ready")
+
+    assert response == "ready"
+    assert len(requests) == 2
+    assert "/models/gemini-primary:" in requests[0]
+    assert "/models/gemini-secondary:" in requests[1]
+    assert sleeps == [0.75]
 
 def test_reply_intent_transition_and_hostile():
     # Acceptance transition to ACTION mode
