@@ -640,6 +640,7 @@ def test_reply_uses_merchant_context_and_hinglish_prompt():
     assert "3 dentists in Lajpat Nagar" in composition["system"]
     assert '"count": 3' in composition["user"]
     assert "peer_clinical" in reply["system"]
+    assert "NEVER claim an action was started, booked, sent, queued, approved" in reply["system"]
     assert "I can share the JIDA summary." in reply["user"]
     assert "JIDA Oct 2026" in fallback["body"]
     assert "CTR 2.1% below peer median 3.0%" in fallback["rationale"]

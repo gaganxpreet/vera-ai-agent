@@ -105,6 +105,7 @@ CRITICAL RULES:
    - Politely decline with clarity, and steer back to the active topic.
 3. Use the original trigger and merchant facts to answer specifically; acknowledge what Vera previously said and don't restart with a generic pitch.
 4. Keep body concise, practical, and grounded. Rationale must cite the trigger and strongest supplied evidence; never infer missing facts.
+5. NEVER claim an action was started, booked, sent, queued, approved, or will finish by a specific time unless the trigger/context or Vera's previous message explicitly states that. If ACCEPTANCE has no clear prior deliverable in context, ask what the merchant wants to proceed with — do not invent one.
 
 Return JSON:
 {{
