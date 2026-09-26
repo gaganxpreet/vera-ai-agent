@@ -86,7 +86,17 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
     t_payload = trigger.get("payload", {})
     kind = trigger.get("kind", "")
     owner_name = merchant.get("owner_first_name") or "there"
-    
+
+    # Dentist merchant-facing voice addresses the owner as "Dr. {name}" (category voice / case studies).
+    # Applied once here so every MERCHANT-facing branch inherits it; customer-facing branches use
+    # `cust_name` and are unaffected. Guarded against double-prefixing when the name already carries a title.
+    _cat_slug = category.get("slug") or merchant.get("category_slug")
+    if _cat_slug == "dentists" and owner_name != "there" and not owner_name.strip().lower().startswith("dr"):
+        owner_name = f"Dr. {owner_name}"
+    # Double-prefix-safe clinical form for research/regulation branches that always address a doctor.
+    # Yields the same output as before for every category (dentist owner_name already carries "Dr.").
+    doc_name = owner_name if owner_name.strip().lower().startswith("dr") else f"Dr. {owner_name}"
+
     if is_reply:
         inbound_lower = inbound_msg.lower()
         if intent == "ACCEPTANCE" or any(w in inbound_lower for w in ["yes", "go ahead", "let's do it", "send", "sure", "ok", "okay", "proceed"]):
@@ -187,11 +197,11 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         n_trial = f" (n={item.get('trial_n')})" if item.get("trial_n") else ""
         
         if title and source:
-            body_text = f"Dr. {owner_name}, fresh findings in {source}: {title}{n_trial}. Relevant to your patient roster. Would you like me to share the 2-minute summary and draft an education note for your patients? — {source}"
-            t_params = [f"Dr. {owner_name}", title, source]
+            body_text = f"{doc_name}, fresh findings in {source}: {title}{n_trial}. Relevant to your patient roster. Would you like me to share the 2-minute summary and draft an education note for your patients? — {source}"
+            t_params = [doc_name, title, source]
         else:
-            body_text = f"Dr. {owner_name}, clinical digest update available for your specialty. Would you like a brief summary of the latest peer findings relevant to {merchant.get('name')}?"
-            t_params = [f"Dr. {owner_name}", "Clinical Research Digest"]
+            body_text = f"{doc_name}, clinical digest update available for your specialty. Would you like a brief summary of the latest peer findings relevant to {merchant.get('name')}?"
+            t_params = [doc_name, "Clinical Research Digest"]
 
         return {
             "body": body_text,
@@ -209,15 +219,15 @@ def _generate_grounded_fallback(projection: Dict[str, Any], is_reply: bool = Fal
         source = item.get("source")
         deadline_phrase = f" with effective deadline {deadline}" if deadline else ""
         if title and source:
-            body_text = f"Dr. {owner_name}, compliance update: {source} published {title}{deadline_phrase}. Want me to send the 3-point checklist to ensure {merchant.get('name')} is fully compliant?"
-            t_params = [f"Dr. {owner_name}", str(deadline or "upcoming"), source]
+            body_text = f"{doc_name}, compliance update: {source} published {title}{deadline_phrase}. Want me to send the 3-point checklist to ensure {merchant.get('name')} is fully compliant?"
+            t_params = [doc_name, str(deadline or "upcoming"), source]
         elif title:
-            body_text = f"Dr. {owner_name}, new compliance guidance{deadline_phrase}: {title}. Want me to send the key compliance checklist for {merchant.get('name')}?"
-            t_params = [f"Dr. {owner_name}", str(deadline or "upcoming"), title[:30]]
+            body_text = f"{doc_name}, new compliance guidance{deadline_phrase}: {title}. Want me to send the key compliance checklist for {merchant.get('name')}?"
+            t_params = [doc_name, str(deadline or "upcoming"), title[:30]]
         else:
             # No specific title/source available — skip specific claim
-            body_text = f"Dr. {owner_name}, there's a regulatory update relevant to {merchant.get('name')}{deadline_phrase}. Want me to share the compliance checklist?"
-            t_params = [f"Dr. {owner_name}", str(deadline or "")]
+            body_text = f"{doc_name}, there's a regulatory update relevant to {merchant.get('name')}{deadline_phrase}. Want me to share the compliance checklist?"
+            t_params = [doc_name, str(deadline or "")]
         return {
             "body": body_text,
             "cta": "binary_yes_no",

@@ -1092,6 +1092,85 @@ def test_empty_output_falls_back_without_generic_fabrication():
     assert "views" in validated["body"]
 
 
+def test_dentist_dr_prefix_across_merchant_facing_fallback_branches():
+    """Merchant-facing dentist fallbacks address the owner as 'Dr. {name}' (category voice / case studies)."""
+    from vera.llm_client import _generate_grounded_fallback
+
+    dentist_merchant = {
+        "name": "Dr. Meera's Clinic", "owner_first_name": "Meera",
+        "locality": "Lajpat Nagar", "category_slug": "dentists"
+    }
+
+    # perf_dip is a plain merchant-facing branch that previously said "Hi Meera"
+    perf = _generate_grounded_fallback({
+        "trigger": {"kind": "perf_dip", "payload": {"metric": "calls", "delta_pct": -0.25}},
+        "merchant": dentist_merchant,
+        "category": {"slug": "dentists"}
+    })
+    assert perf["body"].startswith("Hi Dr. Meera,")
+
+    # competitor is another merchant-facing branch
+    comp = _generate_grounded_fallback({
+        "trigger": {"kind": "competitor_opened", "payload": {"distance_km": 1.3}},
+        "merchant": dentist_merchant,
+        "category": {"slug": "dentists"}
+    })
+    assert "Dr. Meera" in comp["body"]
+
+    # research_digest already hardcoded "Dr." — must NOT double-prefix to "Dr. Dr. Meera"
+    digest = _generate_grounded_fallback({
+        "trigger": {"kind": "research_digest", "payload": {}},
+        "merchant": dentist_merchant,
+        "category": {"slug": "dentists", "target_digest_item": {"title": "Fluoride recall", "source": "JIDA Oct 2026"}}
+    })
+    assert "Dr. Dr." not in digest["body"]
+    assert digest["body"].startswith("Dr. Meera,")
+
+    # Non-dentist merchants must NOT get a "Dr." prefix
+    salon = _generate_grounded_fallback({
+        "trigger": {"kind": "perf_dip", "payload": {"metric": "calls", "delta_pct": -0.25}},
+        "merchant": {"name": "Studio Eleven", "owner_first_name": "Riya", "category_slug": "salons"},
+        "category": {"slug": "salons"}
+    })
+    assert salon["body"].startswith("Hi Riya,")
+    assert "Dr." not in salon["body"]
+
+
+def test_validator_scrubs_internal_snake_case_jargon_from_body():
+    """Leaked internal snake_case tokens in the body are humanized; template_name stays snake_case."""
+    from vera.validator import output_validator, _scrub_internal_jargon
+
+    # Unit-level: the scrubber humanizes multi-part snake_case, leaves plain words alone
+    assert _scrub_internal_jargon("Try shelf_action_recommended now") == "Try shelf action recommended now"
+    assert _scrub_internal_jargon("free_for_members offer") == "free for members offer"
+    assert _scrub_internal_jargon("no underscores here") == "no underscores here"
+
+    projection = {
+        "merchant": {"name": "Apollo Pharmacy", "locality": "Jaipur", "owner_first_name": "Vikas"},
+        "trigger": {"kind": "perf_dip", "payload": {"metric": "views", "delta_pct": -0.20}}
+    }
+    raw = {
+        "body": "Hi Vikas, views dipped 20% in Jaipur. I suggest shelf_action_recommended. Want the steps?",
+        "cta": "binary_yes_no",
+        "send_as": "vera",
+        "template_name": "vera_perf_dip_v1",
+        "rationale": "test"
+    }
+    validated = output_validator.validate_and_repair_proactive(
+        raw,
+        expected_send_as="vera",
+        expected_cta="binary_yes_no",
+        template_name="vera_perf_dip_v1",
+        previous_body_hashes=[],
+        projection=projection
+    )
+    assert validated is not None
+    assert "shelf_action_recommended" not in validated["body"]
+    assert "shelf action recommended" in validated["body"]
+    # The template_name is a legitimate internal identifier and must remain snake_case
+    assert validated["template_name"] == "vera_perf_dip_v1"
+
+
 
 
 
