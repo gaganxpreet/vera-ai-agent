@@ -25,6 +25,10 @@ app = FastAPI(
     version=settings.version
 )
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "magicpin Vera AI Message Engine", "docs": "/docs"}
+
 @app.get("/v1/healthz", response_model=HealthResponse)
 async def healthz():
     uptime = int(time.time() - START_TIME)

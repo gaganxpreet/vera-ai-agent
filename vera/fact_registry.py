@@ -44,6 +44,10 @@ class FactRegistry:
             allowed_sources.add(item["title"].lower())
         if item.get("trial_n") is not None:
             allowed_sample_sizes.add(str(item["trial_n"]))
+        for field in ("title", "source", "summary"):
+            value = item.get(field)
+            if isinstance(value, str):
+                allowed_dates.update(re.findall(r'\b\d{4}-\d{2}-\d{2}\b', value))
 
         # Active & category offers & prices
         for off in merchant.get("active_offers", []) + merchant.get("offers", []):

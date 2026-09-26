@@ -27,6 +27,11 @@ def test_healthz_initial():
     assert data["contexts_loaded"]["category"] == 0
     assert data["contexts_loaded"]["merchant"] == 0
 
+def test_root_health_route():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
 def test_metadata():
     response = client.get("/v1/metadata")
     assert response.status_code == 200
@@ -387,6 +392,29 @@ def test_fact_grounding_validator():
     valid, issues = FactRegistry.verify_grounding("Your revenue dropped by 88% and you owe ₹99999", facts)
     assert valid is False
     assert len(issues) >= 1
+
+def test_fact_grounding_allows_dates_in_category_digest_text():
+    from vera.fact_registry import FactRegistry
+
+    projection = {
+        "category": {
+            "target_digest_item": {
+                "title": "DCI circular dated 2026-11-04",
+                "source": "DCI Oct 2026",
+                "summary": "New dose limits effective 2026-12-01"
+            }
+        },
+        "trigger": {"payload": {}}
+    }
+    facts = FactRegistry.extract_allowed_facts(projection)
+
+    valid, issues = FactRegistry.verify_grounding(
+        "The DCI circular dated 2026-11-04 sets guidance effective 2026-12-01.",
+        facts
+    )
+
+    assert valid is True
+    assert issues == []
 
 def test_consent_revoked_trigger_blocked():
     """Trigger whose customer has revoked consent must produce zero actions."""
